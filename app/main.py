@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, errors_parser, jobs, playlists
+from . import config, errors_parser, health, jobs, playlists
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
@@ -173,6 +173,18 @@ def api_retry(body: RetryIn):
 @app.get("/api/jobs", dependencies=[Depends(require_auth)])
 def api_jobs():
     return {"jobs": jobs.list_jobs()}
+
+
+@app.post("/api/jobs/{job_id}/cancel", dependencies=[Depends(require_auth)])
+def api_cancel_job(job_id: str):
+    if not jobs.cancel_job(job_id):
+        raise HTTPException(status_code=409, detail="Задачу нельзя отменить (уже завершена/не найдена)")
+    return {"ok": True}
+
+
+@app.get("/api/status", dependencies=[Depends(require_auth)])
+def api_status():
+    return health.environment_status()
 
 
 @app.get("/api/jobs/{job_id}", dependencies=[Depends(require_auth)])

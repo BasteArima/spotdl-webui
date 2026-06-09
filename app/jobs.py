@@ -25,7 +25,13 @@ from . import config, errors_parser, playlists
 _jobs: Dict[str, "Job"] = {}
 _jobs_order: List[str] = []
 _jobs_lock = threading.Lock()
-_q: "queue.Queue[str]" = queue.Queue()
+# Две независимые дорожки: интерактивная (ручные действия идут сразу) и фоновая
+# (тяжёлый автосинк). Один и тот же плейлист защищён файловым локом, поэтому
+# дорожки не подерутся за один sync.
+_queues: Dict[str, "queue.Queue[str]"] = {
+    "interactive": queue.Queue(),
+    "background": queue.Queue(),
+}
 _seq = 0
 _seq_lock = threading.Lock()
 
@@ -37,45 +43,68 @@ def _next_id() -> str:
         return f"job{_seq:05d}"
 
 
+MAX_LOG_LINES = 4000  # держим в памяти только хвост лога каждой задачи
+
+# Дорожки воркеров: интерактивная (ручные действия) и фоновая (тяжёлый автосинк).
+LANE_INTERACTIVE = "interactive"
+LANE_BACKGROUND = "background"
+_LANE_BY_KIND = {
+    "download": LANE_INTERACTIVE,
+    "sync": LANE_INTERACTIVE,        # ручной sync одного плейлиста / обновление m3u
+    "retry": LANE_INTERACTIVE,
+    "sync-all": LANE_BACKGROUND,     # «Синхронизировать всё» (тяжёлая)
+    "autosync": LANE_BACKGROUND,     # плановый автосинк
+}
+
+
 class Job:
     def __init__(self, kind: str, title: str, runner: Callable[["Job"], None]):
         self.id = _next_id()
-        self.kind = kind            # sync | sync-all | fix | retry
+        self.kind = kind            # download | sync | sync-all | autosync | retry
+        self.lane = _LANE_BY_KIND.get(kind, LANE_INTERACTIVE)
         self.title = title
         self.runner = runner
         self.status = "queued"      # queued | running | done | error
         self.log: List[str] = []
+        self._dropped = 0           # сколько строк лога вытеснено из начала (для offset)
         self.created = time.time()
         self.started: Optional[float] = None
         self.finished: Optional[float] = None
         self.returncode: Optional[int] = None
+        self.cancelled = False
         self._lock = threading.Lock()
 
     def append(self, text: str) -> None:
         with self._lock:
             for line in text.splitlines():
                 self.log.append(line)
+            overflow = len(self.log) - MAX_LOG_LINES
+            if overflow > 0:
+                del self.log[:overflow]
+                self._dropped += overflow
 
-    def log_since(self, since: int) -> List[str]:
-        with self._lock:
-            return self.log[since:]
+    def total_log_len(self) -> int:
+        return self._dropped + len(self.log)
 
     def to_dict(self, include_log: bool = False, since: int = 0) -> dict:
         with self._lock:
             d = {
                 "id": self.id,
                 "kind": self.kind,
+                "lane": self.lane,
                 "title": self.title,
                 "status": self.status,
                 "created": self.created,
                 "started": self.started,
                 "finished": self.finished,
                 "returncode": self.returncode,
-                "log_len": len(self.log),
+                "log_len": self.total_log_len(),
             }
             if include_log:
-                d["log"] = self.log[since:]
-                d["log_offset"] = since
+                abs_start = max(since, self._dropped)   # вытесненные строки пропускаем
+                local = abs_start - self._dropped
+                d["log"] = self.log[local:]
+                d["log_offset"] = abs_start
         return d
 
 
@@ -209,10 +238,14 @@ def download_match_args(youtube_url: str, spotify_url: str) -> List[str]:
     return ["download", query] + _common_output_args()
 
 
-def retry_errors_args(safe: str) -> List[str]:
-    """Расширенный авто-повтор по errors-файлу через несколько источников аудио."""
+def retry_errors_args(spotify_urls: List[str]) -> List[str]:
+    """Расширенный авто-повтор: пробуем несколько источников аудио для треков.
+
+    ВАЖНО: spotdl распознаёт как файл-список только `*.spotdl`. Путь к errors/*.txt
+    он бы воспринял как поисковый запрос, поэтому передаём СПИСОК Spotify-URL
+    отдельными аргументами (каждый open.spotify.com/track/... обрабатывается)."""
     return [
-        "download", config.errors_path(safe),
+        "download", *spotify_urls,
         "--audio", "youtube-music", "youtube", "soundcloud",
     ] + _common_output_args()
 
@@ -229,6 +262,9 @@ def _run_sync_all(job: Job) -> None:
         job.append("[info] playlists.txt пуст — нечего синхронизировать")
         return
     for pl in pls:
+        if job.cancelled:
+            job.append("[cancelled] остановлено пользователем")
+            return
         job.append(f"=== sync: {pl.name} ===")
         try:
             with PlaylistLock(pl.id, job):
@@ -274,16 +310,22 @@ def _run_sync_for_m3u(job: Job, safe: str) -> None:
 
 
 def _run_retry(job: Job, safe: str) -> None:
-    pl = playlists.find_by_safe(safe)
     job.append(f"=== расширенный повторный поиск по errors/{safe}.txt ===")
+    data = errors_parser.parse_errors_file(config.errors_path(safe))
+    urls = [t["spotify_url"] for t in data.get("tracks", []) if t.get("spotify_url")]
+    if not urls:
+        job.append("[info] в errors-файле нет треков для повтора")
+        return
+    job.append(f"[info] пробуем {len(urls)} трек(ов) через youtube-music / youtube / soundcloud")
+    pl = playlists.find_by_safe(safe)
     if pl is not None:
         with PlaylistLock(pl.id, job):
-            run_spotdl(job, retry_errors_args(safe))
-        job.append(f"=== sync плейлиста '{pl.name}' для обновления m3u ===")
+            run_spotdl(job, retry_errors_args(urls))
+        job.append(f"=== sync '{pl.name}' для обновления m3u ===")
         with PlaylistLock(pl.id, job):
             run_spotdl(job, sync_args(pl))
     else:
-        run_spotdl(job, retry_errors_args(safe))
+        run_spotdl(job, retry_errors_args(urls))
 
 
 # ------------------------------------------------------------------ публичное API
@@ -291,7 +333,7 @@ def _enqueue(job: Job) -> Job:
     with _jobs_lock:
         _jobs[job.id] = job
         _jobs_order.append(job.id)
-    _q.put(job.id)
+    _queues[job.lane].put(job.id)
     return job
 
 
@@ -371,42 +413,88 @@ def get_job(job_id: str) -> Optional[Job]:
         return _jobs.get(job_id)
 
 
+def cancel_job(job_id: str) -> bool:
+    """Отменить задачу. Для queued — снимется до запуска (воркер пропустит).
+    Для running — мягкий запрос: длинные циклы (sync-всех) прервутся между
+    плейлистами, но текущий шаг spotdl доработает."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is None:
+            return False
+        if job.status in ("done", "error", "cancelled"):
+            return False
+        job.cancelled = True
+        if job.status == "queued":
+            job.status = "cancelled"
+            job.finished = time.time()
+    return True
+
+
 def list_jobs(limit: int = 50) -> List[dict]:
     with _jobs_lock:
-        ids = _jobs_order[-limit:][::-1]
-        return [_jobs[i].to_dict() for i in ids]
+        # позиция в очереди: сколько queued/running впереди в той же дорожке
+        order = list(_jobs_order)
+        ahead = {"interactive": 0, "background": 0}
+        pos = {}
+        for jid in order:
+            j = _jobs[jid]
+            if j.status == "queued":
+                ahead[j.lane] += 1
+                pos[jid] = ahead[j.lane]
+            elif j.status == "running":
+                ahead[j.lane] += 1
+        ids = order[-limit:][::-1]
+        out = []
+        for i in ids:
+            d = _jobs[i].to_dict()
+            if d["status"] == "queued":
+                d["queue_pos"] = pos.get(i)
+            out.append(d)
+        return out
 
 
-# ------------------------------------------------------------------ воркер
-def _worker() -> None:
+# ------------------------------------------------------------------ воркеры (по дорожке)
+def _worker(lane: str) -> None:
+    q = _queues[lane]
     while True:
-        job_id = _q.get()
+        job_id = q.get()
         job = get_job(job_id)
         if job is None:
-            _q.task_done()
+            q.task_done()
+            continue
+        if job.cancelled:           # отменена ещё в очереди — пропускаем
+            if job.status not in ("cancelled",):
+                job.status = "cancelled"
+                job.finished = time.time()
+            q.task_done()
             continue
         job.status = "running"
         job.started = time.time()
         try:
             job.runner(job)
-            if job.status != "error":
+            if job.cancelled:
+                job.status = "cancelled"
+            elif job.status != "error":
                 job.status = "done"
         except Exception as e:  # noqa: BLE001 — любая ошибка должна попасть в лог
             job.status = "error"
             job.append(f"[exception] {type(e).__name__}: {e}")
         finally:
             job.finished = time.time()
-            _q.task_done()
+            q.task_done()
 
 
-_worker_thread: Optional[threading.Thread] = None
+_worker_threads: Dict[str, threading.Thread] = {}
 
 
 def start_worker() -> None:
-    global _worker_thread
-    if _worker_thread is None or not _worker_thread.is_alive():
-        _worker_thread = threading.Thread(target=_worker, name="spotdl-worker", daemon=True)
-        _worker_thread.start()
+    for lane in _queues:
+        t = _worker_threads.get(lane)
+        if t is None or not t.is_alive():
+            t = threading.Thread(target=_worker, args=(lane,),
+                                 name=f"spotdl-worker-{lane}", daemon=True)
+            t.start()
+            _worker_threads[lane] = t
 
 
 # ------------------------------------------------------------------ планировщик

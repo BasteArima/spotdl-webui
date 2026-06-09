@@ -121,6 +121,28 @@ tr.row-error td { background: rgba(224,82,96,.08); }
 .status.running { background: #2b4a63; color: #8fc6f0; }
 .status.done { background: #1d4a2c; color: #74d68f; }
 .status.error { background: #4a1d22; color: #f0888f; }
+.status.cancelled { background: #3a3320; color: #d9c089; }
+.rowstatus.cancelled { color: var(--warn); }
+
+/* баннер предупреждений окружения */
+.banner {
+  background: #3a2a14; border: 1px solid #6b4e1f; color: #f0d9a8;
+  border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; font-size: 13px;
+}
+.banner ul { margin: 6px 0 0; padding-left: 18px; }
+
+/* кнопка отмены в строке задачи */
+.taskrow .cancel { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 14px; padding: 0 2px; }
+.taskrow .cancel:hover { color: var(--danger); }
+
+/* адаптивность: таблицы скроллятся по горизонтали на узких экранах */
+.card { overflow-x: auto; }
+@media (max-width: 700px) {
+  main { padding: 12px; }
+  .toolbar input[type=text] { min-width: 140px; }
+  #taskspanel { right: 8px; bottom: 8px; width: calc(100vw - 16px); }
+  table { min-width: 560px; }
+}
 
 .yt-input { width: 100%; min-width: 160px; }
 .modal-bg {

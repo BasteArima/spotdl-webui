@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>spotdl • музыка</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8E%B5%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -33,11 +34,14 @@
   </header>
 
   <main style="display:none" id="appmain">
+    <div id="env-banner" class="banner" style="display:none"></div>
     <!-- ============ Ненайденные ============ -->
     <section class="view active" id="view-errors">
       <div class="toolbar">
         <input type="text" id="err-filter" placeholder="Фильтр по плейлисту / исполнителю / названию…">
         <select id="err-playlist-filter"><option value="">Все плейлисты</option></select>
+        <span class="muted small" id="err-total"></span>
+        <span class="spacer" style="flex:1"></span>
         <button class="btn" id="err-download-all">Скачать все с источником</button>
         <button class="btn secondary" id="err-reload">Обновить</button>
       </div>

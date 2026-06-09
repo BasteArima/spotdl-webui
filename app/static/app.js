@@ -30,7 +30,34 @@ function showApp() {
   document.getElementById("appheader").style.display = "flex";
   document.getElementById("appmain").style.display = "block";
   loadErrors();
+  loadStatus();
   startTaskPolling();
+}
+
+// ------------------------------------------------------------------ статус окружения
+async function loadStatus() {
+  const banner = document.getElementById("env-banner");
+  try {
+    const s = await api("GET", "/api/status");
+    if (s.warnings && s.warnings.length) {
+      banner.innerHTML = "<strong>⚠ Проверьте окружение:</strong><ul>" +
+        s.warnings.map(w => "<li>" + esc(w) + "</li>").join("") + "</ul>";
+      banner.style.display = "block";
+    } else {
+      banner.style.display = "none";
+    }
+  } catch (e) { banner.style.display = "none"; }
+}
+
+function esc(s) { const d = document.createElement("div"); d.textContent = s == null ? "" : s; return d.innerHTML; }
+
+// допустимые источники аудио для добивания (Spotify-URL сюда НЕ годится)
+function validateSource(url) {
+  const u = url.trim().toLowerCase();
+  if (!/^https?:\/\//.test(u)) return "не похоже на ссылку";
+  if (u.includes("open.spotify.com")) return "это Spotify-ссылка — нужен источник аудио (YouTube/YT-Music/SoundCloud)";
+  if (/youtube\.com|youtu\.be|soundcloud\.com|bandcamp\.com|piped/.test(u)) return null;
+  return "ожидается YouTube / YT-Music / SoundCloud / Bandcamp";
 }
 function logout() {
   TOKEN = "";
@@ -167,12 +194,26 @@ function renderErrors() {
   if (!total) {
     cont.appendChild(el("div", { class: "card muted" }, ["Ненайденных треков нет 🎉 (или файлы errors/*.txt пусты)"]));
   }
+  const grand = ERROR_GROUPS.reduce((n, g) => n + g.tracks.length, 0);
+  document.getElementById("err-total").textContent =
+    grand ? `всего ненайдено: ${grand}` + (total !== grand ? ` (показано: ${total})` : "") : "";
 }
 
 // Поставить в очередь скачивание для набора строк (1 или много) — НЕ блокирует.
 async function enqueueDownloads(rows) {
   rows = (rows || []).filter(r => r.input.value.trim());
   if (!rows.length) { toast("Заполните поле источника (YouTube/YT-Music URL)"); return; }
+  // валидация ссылок-источников: невалидные подсвечиваем и не отправляем
+  const bad = rows.filter(r => validateSource(r.input.value));
+  if (bad.length) {
+    bad.forEach(r => {
+      r.statusEl.className = "rowstatus error";
+      r.statusEl.textContent = " " + validateSource(r.input.value);
+    });
+    rows = rows.filter(r => !validateSource(r.input.value));
+    if (!rows.length) { toast("Ссылка-источник некорректна"); return; }
+    toast(`Пропущено некорректных ссылок: ${bad.length}`);
+  }
   const items = rows.map(r => ({
     spotify_url: r.spotify_url, youtube_url: r.input.value.trim(), safe: r.safe,
   }));
@@ -207,7 +248,7 @@ async function doRetry(safe, btn) {
 
 document.getElementById("err-filter").addEventListener("input", renderErrors);
 document.getElementById("err-playlist-filter").addEventListener("change", renderErrors);
-document.getElementById("err-reload").addEventListener("click", loadErrors);
+document.getElementById("err-reload").addEventListener("click", () => { loadErrors(); loadStatus(); });
 document.getElementById("err-download-all").addEventListener("click",
   () => enqueueDownloads(ROWS.filter(r => r.input.value.trim())));
 
@@ -308,6 +349,11 @@ document.getElementById("tasks-collapse").addEventListener("click", () => {
 
 function startTaskPolling() { pollTasks(); }
 
+async function cancelJob(jobId) {
+  try { await api("POST", "/api/jobs/" + jobId + "/cancel"); toast("Отмена запрошена"); pollTasks(); }
+  catch (e) { toast("Не отменить: " + e.message); }
+}
+
 async function pollTasks() {
   clearTimeout(TASK_POLL_TIMER);
   let jobs = [];
@@ -334,6 +380,13 @@ async function pollTasks() {
       row.input.disabled = false;
       row.statusEl.className = "rowstatus error"; row.statusEl.textContent = " ошибка — см. лог";
       PENDING.delete(j.id);
+    } else if (j.status === "cancelled") {
+      row.input.disabled = false;
+      row.statusEl.className = "rowstatus cancelled"; row.statusEl.textContent = " отменено";
+      PENDING.delete(j.id);
+    } else if (j.status === "queued") {
+      row.statusEl.className = "rowstatus queued";
+      row.statusEl.textContent = j.queue_pos ? ` в очереди (#${j.queue_pos})` : " в очереди";
     }
   });
 
@@ -354,10 +407,17 @@ function renderTaskList(jobs) {
   const recent = jobs.slice(0, 12);
   recent.forEach(j => {
     const rowCls = "taskrow" + (SEL_JOB === j.id ? " sel" : "");
-    const tr = el("div", { class: rowCls }, [
+    const statusText = (j.status === "queued" && j.queue_pos) ? `queued #${j.queue_pos}` : j.status;
+    const children = [
       el("span", { class: "tname" }, [j.title]),
-      el("span", { class: "status " + j.status }, [j.status]),
-    ]);
+      el("span", { class: "status " + j.status }, [statusText]),
+    ];
+    if (j.status === "queued" || j.status === "running") {
+      const cancel = el("button", { class: "cancel", title: "Отменить" }, ["✕"]);
+      cancel.addEventListener("click", (ev) => { ev.stopPropagation(); cancelJob(j.id); });
+      children.push(cancel);
+    }
+    const tr = el("div", { class: rowCls }, children);
     tr.addEventListener("click", () => selectTask(j.id, j.title));
     list.appendChild(tr);
   });
