@@ -1,0 +1,24 @@
+services:
+  music-webui:
+    # Образ публикуется в GHCR через GitHub Actions (.github/workflows/build.yml).
+    # ЗАМЕНИ <owner> на свой GitHub-логин (всё в нижнем регистре!), а при другом
+    # имени репозитория — и spotdl-webui. Узнать точный путь можно в логе
+    # Actions (шаг "Build and push") или на странице Packages репозитория.
+    image: ghcr.io/<owner>/spotdl-webui:latest
+    container_name: spotdl-webui
+    pull_policy: always        # docker compose up всегда тянет свежий образ
+    restart: unless-stopped
+    ports:
+      - "4535:8000"            # 4533 занят Navidrome, 4534 — Syncify
+    environment:
+      - PUID=998               # тот же uid, под которым Navidrome читает музыку
+      - PGID=100
+      - WEB_PORT=8000
+      # ОБЯЗАТЕЛЬНО заменить: без токена сервис не стартует.
+      - APP_AUTH_TOKEN=ЗАМЕНИ_МЕНЯ
+      # Фоновый автосинк (замена старого контейнера-автосинка). 0 = выключить.
+      - AUTOSYNC_INTERVAL_HOURS=24
+      - AUTOSYNC_ON_START=true
+    volumes:
+      - "/srv/dev-disk-by-uuid-6c40d758-c9b4-46dc-a0b1-84826fd43804/data/spotdl:/conf"
+      - "/srv/dev-disk-by-uuid-be7624de-4d24-4133-b0b5-8e3cd8548788/storage/music:/music"

@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>spotdl • музыка</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <!-- Экран входа -->
+  <div id="login-screen">
+    <div class="modal" style="width:340px">
+      <h2>Вход</h2>
+      <label>Токен доступа</label>
+      <input id="login-token" type="password" autocomplete="current-password" placeholder="APP_AUTH_TOKEN">
+      <div class="err-msg" id="login-err"></div>
+      <div class="actions">
+        <button class="btn" id="login-btn">Войти</button>
+      </div>
+    </div>
+  </div>
+
+  <header style="display:none" id="appheader">
+    <h1>🎵 spotdl <span class="muted small">web-ui</span></h1>
+    <nav>
+      <button data-view="errors" class="active">Ненайденные</button>
+      <button data-view="playlists">Плейлисты</button>
+      <button data-view="jobs">Задачи</button>
+    </nav>
+    <span class="spacer"></span>
+    <button class="btn secondary" id="syncall-btn">Синхронизировать всё</button>
+    <button class="btn secondary" id="logout-btn">Выйти</button>
+  </header>
+
+  <main style="display:none" id="appmain">
+    <!-- ============ Ненайденные ============ -->
+    <section class="view active" id="view-errors">
+      <div class="toolbar">
+        <input type="text" id="err-filter" placeholder="Фильтр по плейлисту / исполнителю / названию…">
+        <select id="err-playlist-filter"><option value="">Все плейлисты</option></select>
+        <button class="btn" id="err-download-all">Скачать все с источником</button>
+        <button class="btn secondary" id="err-reload">Обновить</button>
+      </div>
+      <div id="errors-container"></div>
+    </section>
+
+    <!-- ============ Плейлисты ============ -->
+    <section class="view" id="view-playlists">
+      <div class="toolbar">
+        <button class="btn" id="pl-add-btn">+ Добавить плейлист</button>
+        <button class="btn secondary" id="pl-reload">Обновить</button>
+      </div>
+      <div class="card">
+        <table id="pl-table">
+          <thead><tr><th>Имя</th><th>Тип</th><th>Ссылка</th><th style="width:1%"></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ Задачи ============ -->
+    <section class="view" id="view-jobs">
+      <div class="toolbar">
+        <button class="btn secondary" id="jobs-reload">Обновить</button>
+      </div>
+      <div class="card">
+        <table id="jobs-table">
+          <thead><tr><th>Задача</th><th>Тип</th><th>Статус</th><th style="width:1%"></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <!-- Панель задач (очередь + статусы) -->
+  <div id="taskspanel">
+    <div class="taskshead">
+      <span class="title">Задачи</span>
+      <span class="muted small" id="tasks-summary"></span>
+      <span class="spacer"></span>
+      <button class="btn secondary small" id="tasks-collapse" title="Свернуть/развернуть">▾</button>
+    </div>
+    <div id="taskslist"></div>
+    <pre id="tasklog" style="display:none"></pre>
+  </div>
+
+  <!-- Модалка плейлиста -->
+  <div class="modal-bg" id="pl-modal-bg">
+    <div class="modal">
+      <h2 id="pl-modal-title">Добавить плейлист</h2>
+      <label>Отображаемое имя</label>
+      <input id="pl-modal-name" type="text" placeholder="NieR: Automata OST">
+      <label>Spotify-ссылка (playlist / album / track / artist)</label>
+      <input id="pl-modal-url" type="text" placeholder="https://open.spotify.com/playlist/…">
+      <div class="err-msg" id="pl-modal-err"></div>
+      <div class="actions">
+        <button class="btn secondary" id="pl-modal-cancel">Отмена</button>
+        <button class="btn" id="pl-modal-save">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+.git
+.github
+__pycache__
+*.pyc
+tests
+README.md
+.dockerignore
+.gitignore
+docker-compose.yml
+_smoke
+_s
+*.spotdl
+cookies.txt

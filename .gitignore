@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# локальные тестовые артефакты
+_smoke/
+_s/
+_data/
+
+# данные spotdl (на сервере монтируются томами, в репо им не место)
+*.spotdl
+cookies.txt
+
+# окружение/IDE
+.venv/
+.env
+.idea/
+.vscode/
+.DS_Store
