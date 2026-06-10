@@ -255,9 +255,27 @@ def retry_errors_args(spotify_urls: List[str]) -> List[str]:
 
 
 # ------------------------------------------------------------------ раннеры задач
-def _run_sync_playlist(job: Job, pl: playlists.Playlist) -> None:
+def _reset_errors_file(safe: str) -> None:
+    """Удаляет errors-файл плейлиста перед sync. spotdl пишет --save-errors в
+    режиме ДОЗАПИСИ, поэтому без сброса повторные сканы копят дубли и устаревшие
+    записи. После удаления spotdl создаёт файл заново со свежим полным списком."""
+    p = config.errors_path(safe)
+    try:
+        if os.path.exists(p):
+            os.remove(p)
+    except OSError:
+        pass
+
+
+def _sync_locked(job: Job, pl: playlists.Playlist) -> None:
+    """Sync плейлиста под локом со сбросом errors-файла (защита от дублей)."""
     with PlaylistLock(pl.id, job):
+        _reset_errors_file(pl.safe)
         run_spotdl(job, sync_args(pl))
+
+
+def _run_sync_playlist(job: Job, pl: playlists.Playlist) -> None:
+    _sync_locked(job, pl)
 
 
 def _run_sync_all(job: Job) -> None:
@@ -271,8 +289,7 @@ def _run_sync_all(job: Job) -> None:
             return
         job.append(f"=== sync: {pl.name} ===")
         try:
-            with PlaylistLock(pl.id, job):
-                run_spotdl(job, sync_args(pl))
+            _sync_locked(job, pl)
         except TimeoutError as e:
             job.append(f"[skip] {pl.name}: {e}")
 
@@ -336,8 +353,7 @@ def _run_sync_for_m3u(job: Job, safe: str) -> None:
         return
     job.append(f"=== sync '{pl.name}' для обновления m3u ===")
     try:
-        with PlaylistLock(pl.id, job):
-            run_spotdl(job, sync_args(pl))
+        _sync_locked(job, pl)
     except TimeoutError as e:
         job.append(f"[warn] не удалось взять лок для sync: {e}")
 
@@ -355,8 +371,7 @@ def _run_retry(job: Job, safe: str) -> None:
         with PlaylistLock(pl.id, job):
             run_spotdl(job, retry_errors_args(urls))
         job.append(f"=== sync '{pl.name}' для обновления m3u ===")
-        with PlaylistLock(pl.id, job):
-            run_spotdl(job, sync_args(pl))
+        _sync_locked(job, pl)
     else:
         run_spotdl(job, retry_errors_args(urls))
 

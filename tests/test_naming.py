@@ -93,6 +93,29 @@ def test_parse_errors():
         assert t0["song"] == "Arcane - Vow (feat. Ray Chen)"
 
 
+DUP_ERRORS = """2026-06-01-10-00-00
+https://open.spotify.com/track/t1 - LookupError: No results found for song: A - One
+https://open.spotify.com/track/t2 - LookupError: No results found for song: B - Two
+2026-06-02-12-30-00
+https://open.spotify.com/track/t1 - LookupError: No results found for song: A - One
+https://open.spotify.com/track/t2 - LookupError: No results found for song: B - Two
+https://open.spotify.com/track/t3 - LookupError: No results found for song: C - Three
+"""
+
+
+def test_parse_errors_dedup():
+    """spotdl дозаписывает --save-errors при каждом скане → дубли; парсер их
+    схлопывает по Spotify-URL и берёт последний таймстамп."""
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "P.txt")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(DUP_ERRORS)
+        data = errors_parser.parse_errors_file(path)
+        urls = [t["spotify_url"].rsplit("/", 1)[-1] for t in data["tracks"]]
+        assert urls == ["t1", "t2", "t3"], urls           # 3 уникальных, не 5
+        assert data["timestamp"] == "2026-06-02-12-30-00"  # последний таймстамп
+
+
 def test_remove_track(monkeypatch=None):
     with tempfile.TemporaryDirectory() as d:
         errdir = os.path.join(d, "errors")

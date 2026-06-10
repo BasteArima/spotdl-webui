@@ -48,22 +48,35 @@ def _parse_track_line(line: str) -> Optional[dict]:
 
 
 def parse_errors_file(path: str) -> dict:
-    """Возвращает {safe, playlist_file, timestamp, tracks: [...]}."""
+    """Возвращает {safe, playlist_file, timestamp, tracks: [...]}.
+
+    spotdl пишет --save-errors в режиме ДОЗАПИСИ: каждый скан добавляет блок
+    «таймстамп + ненайденные треки» в конец файла, поэтому при повторных сканах
+    один и тот же трек встречается многократно. Здесь дедуплицируем треки по
+    Spotify-URL (оставляем первое вхождение) и берём последний таймстамп."""
     safe = os.path.splitext(os.path.basename(path))[0]
     timestamp = ""
     tracks: List[dict] = []
+    seen = set()
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             lines = fh.read().splitlines()
     except OSError:
         lines = []
-    for i, line in enumerate(lines):
-        if i == 0 and not line.strip().lower().startswith("http"):
-            timestamp = line.strip()
+    for line in lines:
+        s = line.strip()
+        if not s:
             continue
         parsed = _parse_track_line(line)
         if parsed:
+            key = parsed["spotify_url"]
+            if key in seen:
+                continue
+            seen.add(key)
             tracks.append(parsed)
+        elif not s.lower().startswith("http"):
+            # строка-таймстамп (их может быть несколько — берём самую свежую)
+            timestamp = s
     return {
         "safe": safe,
         "file": os.path.basename(path),
