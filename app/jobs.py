@@ -15,6 +15,7 @@
 import os
 import queue
 import subprocess
+import sys
 import threading
 import time
 from typing import Callable, Dict, List, Optional
@@ -50,6 +51,7 @@ LANE_INTERACTIVE = "interactive"
 LANE_BACKGROUND = "background"
 _LANE_BY_KIND = {
     "download": LANE_INTERACTIVE,
+    "upload": LANE_INTERACTIVE,      # заливка локального файла + мета со Spotify
     "sync": LANE_INTERACTIVE,        # ручной sync одного плейлиста / обновление m3u
     "retry": LANE_INTERACTIVE,
     "sync-all": LANE_BACKGROUND,     # «Синхронизировать всё» (тяжёлая)
@@ -174,14 +176,9 @@ def looks_failed(lines: List[str]) -> bool:
     return any(any(m in ln for m in _FAIL_MARKERS) for ln in lines)
 
 
-def run_spotdl(job: Job, args: List[str]):
-    """Запускает spotdl, построчно пишет stdout/stderr в лог задачи И в stdout
-    контейнера (видно в `docker logs`). Возвращает (код_возврата, строки_вывода).
-
-    cwd=/ — критично: spotdl 4.5.0 прогоняет части пути --m3u через sanitize,
-    который вырезает '/', превращая абсолютный путь в относительный. Из cwd=/
-    он резолвится обратно в /music/... (так же ведёт себя контейнер автосинка)."""
-    cmd = [config.SPOTDL_BIN] + args
+def _run_process(job: Job, cmd: List[str], cwd: str = "/"):
+    """Запускает процесс, построчно пишет stdout/stderr в лог задачи И в stdout
+    контейнера (видно в `docker logs`). Возвращает (код_возврата, строки_вывода)."""
     job.append("$ " + " ".join(cmd))
     env = dict(os.environ)
     env.setdefault("PYTHONUNBUFFERED", "1")
@@ -194,10 +191,10 @@ def run_spotdl(job: Job, args: List[str]):
             text=True,
             bufsize=1,
             env=env,
-            cwd="/",
+            cwd=cwd,
         )
     except FileNotFoundError:
-        job.append(f"[error] не найден исполняемый файл: {config.SPOTDL_BIN}")
+        job.append(f"[error] не найден исполняемый файл: {cmd[0]}")
         job.returncode = 127
         return 127, out_lines
     assert proc.stdout is not None
@@ -210,6 +207,13 @@ def run_spotdl(job: Job, args: List[str]):
     job.returncode = proc.returncode
     job.append(f"[exit] код возврата: {proc.returncode}")
     return proc.returncode, out_lines
+
+
+def run_spotdl(job: Job, args: List[str]):
+    """Запуск spotdl с cwd=/ — критично: spotdl 4.5.0 прогоняет части пути --m3u
+    через sanitize, который вырезает '/', превращая абсолютный путь в
+    относительный. Из cwd=/ он резолвится обратно в /music/... (как автосинк)."""
+    return _run_process(job, [config.SPOTDL_BIN] + args, cwd="/")
 
 
 def _common_output_args() -> List[str]:
@@ -295,6 +299,35 @@ def _run_download_one(job: Job, spotify_url: str, youtube_url: str, safe: str) -
     _download_track(job, spotify_url, youtube_url, safe)
 
 
+def place_localfile_args(temp_path: str, spotify_url: str) -> List[str]:
+    return [
+        sys.executable, "-m", "app.place_localfile",
+        temp_path, spotify_url, config.OUTPUT_TEMPLATE,
+        config.AUDIO_FORMAT, config.UPLOAD_BITRATE,
+    ]
+
+
+def _run_upload(job: Job, temp_path: str, spotify_url: str, safe: str, orig_name: str) -> None:
+    """Заливка локального файла: ffmpeg-конвертация в формат библиотеки + мета и
+    обложка со Spotify, размещение по тому же шаблону пути, что и обычная загрузка.
+    То же, что spotdl делает после скачивания аудио — только источник локальный."""
+    job.append(f"=== заливка локального файла: {orig_name} ===")
+    rc, out = _run_process(job, place_localfile_args(temp_path, spotify_url), cwd="/app")
+    try:
+        os.remove(temp_path)
+    except OSError:
+        pass
+    ok = rc == 0 and any(line.startswith("OK ") for line in out)
+    if not ok:
+        job.status = "error"
+        job.append("[error] заливка не удалась — трек оставлен в списке ненайденных")
+        return
+    if errors_parser.remove_track(safe, spotify_url):
+        job.append("[ok] файл размещён, трек убран из errors-файла")
+    else:
+        job.append("[ok] файл размещён (в errors-файле не найден — возможно, уже убран)")
+
+
 def _run_sync_for_m3u(job: Job, safe: str) -> None:
     """Обновляет m3u плейлиста через sync (чтобы скачанные треки попали в Navidrome)."""
     pl = playlists.find_by_safe(safe)
@@ -366,6 +399,12 @@ def _has_pending_sync_all() -> bool:
 def enqueue_download_one(spotify_url: str, youtube_url: str, safe: str) -> Job:
     job = Job("download", f"Скачивание трека ({safe})",
               lambda j: _run_download_one(j, spotify_url, youtube_url, safe))
+    return _enqueue(job)
+
+
+def enqueue_upload(temp_path: str, spotify_url: str, safe: str, orig_name: str) -> Job:
+    job = Job("upload", f"Заливка файла ({safe})",
+              lambda j: _run_upload(j, temp_path, spotify_url, safe, orig_name))
     return _enqueue(job)
 
 

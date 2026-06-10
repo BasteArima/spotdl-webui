@@ -11,6 +11,7 @@ PLAYLISTS_FILE = os.environ.get("PLAYLISTS_FILE", os.path.join(CONF_DIR, "playli
 COOKIE_FILE = os.environ.get("COOKIE_FILE", os.path.join(CONF_DIR, "cookies.txt"))
 ERRORS_DIR = os.environ.get("ERRORS_DIR", os.path.join(CONF_DIR, "errors"))
 LOCKS_DIR = os.environ.get("LOCKS_DIR", os.path.join(CONF_DIR, ".webui-locks"))
+UPLOADS_DIR = os.environ.get("UPLOADS_DIR", os.path.join(CONF_DIR, ".webui-uploads"))
 
 # Папки музыки
 PLAYLISTS_M3U_DIR = os.environ.get("PLAYLISTS_M3U_DIR", os.path.join(MUSIC_DIR, "playlists"))
@@ -21,6 +22,9 @@ OUTPUT_TEMPLATE = os.environ.get(
     "/music/spotify/{album-artist}/{album}/{track-number} - {title}.{output-ext}",
 )
 AUDIO_FORMAT = os.environ.get("AUDIO_FORMAT", "mp3")
+# Битрейт конвертации залитых вручную файлов. "auto"/"" — не форсировать (ffmpeg
+# по умолчанию). По умолчанию 256k, чтобы не сильно ронять качество исходника.
+UPLOAD_BITRATE = os.environ.get("UPLOAD_BITRATE", "256k")
 
 # Авторизация. Без токена сервис стартовать не должен (см. main.py).
 APP_AUTH_TOKEN = os.environ.get("APP_AUTH_TOKEN", "")

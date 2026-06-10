@@ -3,9 +3,12 @@
 Токен НИКОГДА не передаётся в URL/query."""
 import hmac
 import os
+import re
+import shutil
+import uuid
 from typing import Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -159,6 +162,42 @@ def api_download_batch(body: DownloadBatchIn):
         raise HTTPException(status_code=400, detail="Нет треков с заполненным источником")
     result = jobs.enqueue_download_batch(items)
     return result
+
+
+_SPOTIFY_TRACK_RE = re.compile(r"open\.spotify\.com/track/", re.IGNORECASE)
+
+
+@app.post("/api/upload", dependencies=[Depends(require_auth)])
+async def api_upload(
+    spotify_url: str = Form(...),
+    safe: str = Form(...),
+    file: UploadFile = File(...),
+):
+    """Заливка локального аудиофайла: получит метаданные/обложку со Spotify и
+    ляжет в библиотеку по тому же пути, что и обычная загрузка."""
+    spotify_url = spotify_url.strip()
+    safe = safe.strip()
+    if not _SPOTIFY_TRACK_RE.search(spotify_url):
+        raise HTTPException(status_code=400, detail="Нужна ссылка на трек Spotify (open.spotify.com/track/…)")
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Файл не передан")
+
+    os.makedirs(config.UPLOADS_DIR, exist_ok=True)
+    ext = os.path.splitext(file.filename)[1][:10] or ".audio"
+    tmp_path = os.path.join(config.UPLOADS_DIR, f"{uuid.uuid4().hex}{ext}")
+    try:
+        with open(tmp_path, "wb") as out:
+            shutil.copyfileobj(file.file, out, length=1024 * 1024)
+    finally:
+        await file.close()
+
+    job = jobs.enqueue_upload(tmp_path, spotify_url, safe, file.filename)
+    sync = jobs.enqueue_sync_for_m3u(safe) if safe else None
+    return {
+        "job": job.to_dict(),
+        "sync": sync.to_dict() if sync else None,
+        "filename": file.filename,
+    }
 
 
 @app.post("/api/retry", dependencies=[Depends(require_auth)])

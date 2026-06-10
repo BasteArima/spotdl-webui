@@ -55,11 +55,13 @@ mkdir -p "$APP_HOME"
 export HOME="$APP_HOME"
 
 # --- рабочие папки данных -----------------------------------------------------
-mkdir -p "$CONF_DIR/errors" "$CONF_DIR/.webui-locks" "$MUSIC_DIR/playlists" 2>/dev/null || true
+mkdir -p "$CONF_DIR/errors" "$CONF_DIR/.webui-locks" "$CONF_DIR/.webui-uploads" \
+         "$MUSIC_DIR/playlists" 2>/dev/null || true
 
-# Чауним только то, что принадлежит сервису (HOME и локи). НЕ трогаем общую
-# музыку и чужие данные автосинка в /conf, чтобы не сломать права.
-chown -R "$PUID:$PGID" "$APP_HOME" "$CONF_DIR/.webui-locks" 2>/dev/null || true
+# Чауним только то, что принадлежит сервису (HOME, локи, загрузки). НЕ трогаем
+# общую музыку и чужие данные автосинка в /conf, чтобы не сломать права.
+chown -R "$PUID:$PGID" "$APP_HOME" "$CONF_DIR/.webui-locks" \
+         "$CONF_DIR/.webui-uploads" 2>/dev/null || true
 
 echo "[entrypoint] запуск под $PUID:$PGID, HOME=$HOME, порт=$WEB_PORT"
 echo "[entrypoint] spotdl: $(command -v spotdl || echo '?')  deno: $(command -v deno || echo 'нет')"

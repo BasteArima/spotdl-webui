@@ -152,6 +152,8 @@ function renderErrors() {
       const input = el("input", { type: "text", class: "yt-input", placeholder: "YouTube / YT-Music URL" });
       const statusEl = el("span", { class: "rowstatus" }, [""]);
       const dlBtn = el("button", { class: "btn small" }, ["Скачать"]);
+      const fileInput = el("input", { type: "file", accept: "audio/*,.mp3,.flac,.m4a,.opus,.ogg,.wav", style: "display:none" });
+      const fileBtn = el("button", { class: "btn secondary small", title: "Залить локальный файл — получит мету и обложку со Spotify" }, ["📁 Файл"]);
       const q = encodeURIComponent(t.song || "");
       const rowEl = el("tr", {}, [
         el("td", {}, [t.song || el("span", { class: "muted" }, ["(имя не распознано)"])]),
@@ -159,11 +161,16 @@ function renderErrors() {
         el("td", {}, [el("a", { href: t.spotify_url, target: "_blank", rel: "noopener" }, ["Spotify ↗"])]),
         el("td", {}, [el("a", { href: "https://music.youtube.com/search?q=" + q, target: "_blank", rel: "noopener" }, ["искать на YT ↗"])]),
         el("td", {}, [input]),
-        el("td", {}, [dlBtn, statusEl]),
+        el("td", {}, [el("div", { class: "row" }, [dlBtn, fileBtn, fileInput, statusEl])]),
       ]);
       const row = { spotify_url: t.spotify_url, safe: g.safe, input, statusEl, rowEl };
       ROWS.push(row); groupRows.push(row);
       dlBtn.addEventListener("click", () => enqueueDownloads([row]));
+      fileBtn.addEventListener("click", () => fileInput.click());
+      fileInput.addEventListener("change", () => {
+        if (fileInput.files && fileInput.files[0]) uploadFile(row, fileInput.files[0]);
+        fileInput.value = "";
+      });
       tbody.appendChild(rowEl);
     });
 
@@ -234,6 +241,33 @@ async function enqueueDownloads(rows) {
     showTasks();
     pollTasks();
   } catch (e) { toast("Ошибка: " + e.message); }
+}
+
+// Залить локальный файл: получит мету/обложку со Spotify и ляжет в библиотеку.
+async function uploadFile(row, file) {
+  const fd = new FormData();
+  fd.append("spotify_url", row.spotify_url);
+  fd.append("safe", row.safe);
+  fd.append("file", file);
+  row.statusEl.className = "rowstatus queued";
+  row.statusEl.textContent = " загрузка файла…";
+  try {
+    // НЕ задаём Content-Type — браузер сам выставит multipart boundary.
+    const res = await fetch("/api/upload", { method: "POST", headers: authHeaders(), body: fd });
+    if (res.status === 401) { logout(); return; }
+    let data = null; try { data = await res.json(); } catch (e) {}
+    if (!res.ok) throw new Error((data && data.detail) || ("HTTP " + res.status));
+    PENDING.set(data.job.id, row);
+    row.input.disabled = true;
+    row.statusEl.className = "rowstatus queued";
+    row.statusEl.textContent = " файл в очереди";
+    toast("Файл «" + file.name + "» в очереди");
+    showTasks(); pollTasks();
+  } catch (e) {
+    row.statusEl.className = "rowstatus error";
+    row.statusEl.textContent = " " + e.message;
+    toast("Ошибка заливки: " + e.message);
+  }
 }
 
 async function doRetry(safe, btn) {
