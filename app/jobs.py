@@ -467,6 +467,23 @@ def get_job(job_id: str) -> Optional[Job]:
         return _jobs.get(job_id)
 
 
+def remove_job(job_id: str) -> bool:
+    """Убрать ЗАВЕРШЁННУЮ задачу из списка (done/error/cancelled). Активные
+    (queued/running) удалять нельзя — их сначала надо отменить."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is None:
+            return False
+        if job.status in ("queued", "running"):
+            return False
+        _jobs.pop(job_id, None)
+        try:
+            _jobs_order.remove(job_id)
+        except ValueError:
+            pass
+        return True
+
+
 def cancel_job(job_id: str) -> bool:
     """Отменить задачу. Для queued — снимется до запуска (воркер пропустит).
     Для running — мягкий запрос: длинные циклы (sync-всех) прервутся между

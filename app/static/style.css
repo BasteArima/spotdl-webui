@@ -131,9 +131,18 @@ tr.row-error td { background: rgba(224,82,96,.08); }
 }
 .banner ul { margin: 6px 0 0; padding-left: 18px; }
 
-/* кнопка отмены в строке задачи */
-.taskrow .cancel { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 14px; padding: 0 2px; }
-.taskrow .cancel:hover { color: var(--danger); }
+/* кнопка действия в строке задачи (отмена/удаление) */
+.taskrow .tact { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0 2px; line-height: 1; }
+.taskrow .tact.cancel:hover { color: var(--danger); }
+.taskrow .tact.remove:hover { color: var(--fg); }
+#tasks-collapse { min-width: 26px; }
+
+/* компактные действия на странице плейлистов — без гигантских пустых строк */
+#pl-table td { vertical-align: middle; }
+.pl-actions { display: flex; gap: 6px; flex-wrap: nowrap; justify-content: flex-end; align-items: center; }
+.pl-actions .btn { padding: 5px 10px; }
+.pl-url { display: inline-block; max-width: 440px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+@media (max-width: 700px) { .pl-url { max-width: 160px; } }
 
 /* адаптивность: таблицы скроллятся по горизонтали на узких экранах */
 .card { overflow-x: auto; }

@@ -303,8 +303,8 @@ async function loadPlaylists() {
       tb.appendChild(el("tr", {}, [
         el("td", {}, [p.name]),
         el("td", {}, [el("span", { class: "tag " + p.type }, [p.type])]),
-        el("td", {}, [el("a", { href: p.url, target: "_blank", rel: "noopener", class: "small" }, [p.url])]),
-        el("td", {}, [el("div", { class: "row" }, [syncBtn, editBtn, delBtn])]),
+        el("td", {}, [el("a", { href: p.url, target: "_blank", rel: "noopener", class: "small pl-url", title: p.url }, [p.url])]),
+        el("td", {}, [el("div", { class: "pl-actions" }, [syncBtn, editBtn, delBtn])]),
       ]));
     });
   } catch (e) { toast("Ошибка: " + e.message); }
@@ -373,19 +373,37 @@ document.getElementById("syncall-btn").addEventListener("click", async () => {
 
 // ------------------------------------------------------------------ панель задач (справа снизу)
 let TASK_POLL_TIMER = null;
-let SEL_JOB = null;        // id задачи, чей лог открыт
+let SEL_JOB = null;        // id задачи, чей лог открыт (инлайн под строкой)
 let SEL_LOG_OFFSET = 0;
+const LOG_EL = document.getElementById("tasklog");  // переносим под выбранную строку
 
 function showTasks() { document.getElementById("taskspanel").classList.add("visible"); }
+function hideLog() { SEL_JOB = null; if (LOG_EL.parentNode) LOG_EL.remove(); LOG_EL.style.display = "none"; }
+
+function updateCollapseArrow() {
+  const collapsed = document.getElementById("taskspanel").classList.contains("collapsed");
+  // развёрнуто (очередь видна) → стрелка вниз; свёрнуто (скрыто) → вверх
+  document.getElementById("tasks-collapse").textContent = collapsed ? "▴" : "▾";
+}
 document.getElementById("tasks-collapse").addEventListener("click", () => {
-  document.getElementById("taskspanel").classList.toggle("collapsed");
+  const collapsed = document.getElementById("taskspanel").classList.toggle("collapsed");
+  if (collapsed) hideLog();           // сворачивание закрывает и открытый лог
+  updateCollapseArrow();
 });
+updateCollapseArrow();
 
 function startTaskPolling() { pollTasks(); }
 
 async function cancelJob(jobId) {
-  try { await api("POST", "/api/jobs/" + jobId + "/cancel"); toast("Отмена запрошена"); pollTasks(); }
+  try { await api("POST", "/api/jobs/" + jobId + "/cancel"); pollTasks(); }
   catch (e) { toast("Не отменить: " + e.message); }
+}
+async function removeJob(jobId) {
+  try {
+    await api("DELETE", "/api/jobs/" + jobId);
+    if (SEL_JOB === jobId) hideLog();
+    pollTasks();
+  } catch (e) { toast("Не удалить: " + e.message); }
 }
 
 async function pollTasks() {
@@ -396,16 +414,15 @@ async function pollTasks() {
     jobs = data.jobs || [];
   } catch (e) { /* молча, повторим */ }
 
-  // обновляем строки ненайденных по статусу их задач скачивания
+  // обновляем строки ненайденных по статусу их задач скачивания/заливки
   let active = 0;
   jobs.forEach(j => {
     if (j.status === "queued" || j.status === "running") active++;
     const row = PENDING.get(j.id);
     if (!row) return;
     if (j.status === "running") {
-      row.statusEl.className = "rowstatus running"; row.statusEl.textContent = " качается…";
+      row.statusEl.className = "rowstatus running"; row.statusEl.textContent = " идёт…";
     } else if (j.status === "done") {
-      // успех — строка больше не нужна
       row.rowEl.classList.add("row-done");
       setTimeout(() => { if (row.rowEl.parentNode) row.rowEl.parentNode.removeChild(row.rowEl); }, 400);
       PENDING.delete(j.id);
@@ -425,52 +442,60 @@ async function pollTasks() {
   });
 
   renderTaskList(jobs);
-  if (jobs.length) showTasks();
-
-  // если открыт лог выбранной задачи — подтягиваем
   if (SEL_JOB) refreshSelectedLog();
 
-  // частим, пока что-то активно; иначе реже
   const delay = (active > 0 || PENDING.size > 0) ? 1500 : 4000;
   TASK_POLL_TIMER = setTimeout(pollTasks, delay);
 }
 
 function renderTaskList(jobs) {
+  const panel = document.getElementById("taskspanel");
   const list = document.getElementById("taskslist");
+  if (LOG_EL.parentNode) LOG_EL.remove();   // сохранить элемент перед очисткой списка
   list.innerHTML = "";
+
+  // панель видна только когда есть задачи; пусто — прячем (размер «как свёрнуто»)
+  if (!jobs.length) { panel.classList.remove("visible"); document.getElementById("tasks-summary").textContent = ""; return; }
+  panel.classList.add("visible");
+
   const recent = jobs.slice(0, 12);
+  let selRow = null;
   recent.forEach(j => {
-    const rowCls = "taskrow" + (SEL_JOB === j.id ? " sel" : "");
-    const statusText = (j.status === "queued" && j.queue_pos) ? `queued #${j.queue_pos}` : j.status;
-    const children = [
+    const isActive = j.status === "queued" || j.status === "running";
+    const statusText = (j.status === "queued" && j.queue_pos) ? `в очереди #${j.queue_pos}` : j.status;
+    const actBtn = isActive
+      ? el("button", { class: "tact cancel", title: "Отменить" }, ["✕"])
+      : el("button", { class: "tact remove", title: "Убрать из списка" }, ["🗑"]);
+    actBtn.addEventListener("click", (ev) => { ev.stopPropagation(); isActive ? cancelJob(j.id) : removeJob(j.id); });
+    const tr = el("div", { class: "taskrow" + (SEL_JOB === j.id ? " sel" : "") }, [
       el("span", { class: "tname" }, [j.title]),
       el("span", { class: "status " + j.status }, [statusText]),
-    ];
-    if (j.status === "queued" || j.status === "running") {
-      const cancel = el("button", { class: "cancel", title: "Отменить" }, ["✕"]);
-      cancel.addEventListener("click", (ev) => { ev.stopPropagation(); cancelJob(j.id); });
-      children.push(cancel);
-    }
-    const tr = el("div", { class: rowCls }, children);
-    tr.addEventListener("click", () => selectTask(j.id, j.title));
+      actBtn,
+    ]);
+    tr.addEventListener("click", () => selectTask(j.id));
     list.appendChild(tr);
+    if (SEL_JOB === j.id) selRow = tr;
   });
+
+  // инлайн-лог: вставляем прямо ПОД выбранной строкой
+  if (selRow && !panel.classList.contains("collapsed")) {
+    selRow.insertAdjacentElement("afterend", LOG_EL);
+    LOG_EL.style.display = "block";
+  } else {
+    if (SEL_JOB && !recent.some(j => j.id === SEL_JOB)) SEL_JOB = null;  // выбранная пропала
+    LOG_EL.style.display = "none";
+  }
+
   const active = jobs.filter(j => j.status === "queued" || j.status === "running").length;
-  document.getElementById("tasks-summary").textContent =
-    active ? `активно: ${active}` : (jobs.length ? "очередь пуста" : "");
+  document.getElementById("tasks-summary").textContent = active ? `активно: ${active}` : "";
 }
 
-function selectTask(jobId, title) {
-  if (SEL_JOB === jobId) {  // повторный клик — закрыть лог
-    SEL_JOB = null;
-    document.getElementById("tasklog").style.display = "none";
-    return;
-  }
-  SEL_JOB = jobId; SEL_LOG_OFFSET = 0;
-  const pre = document.getElementById("tasklog");
-  pre.style.display = "block"; pre.textContent = "";
+function selectTask(jobId) {
+  if (SEL_JOB === jobId) { hideLog(); pollTasks(); return; }  // повторный клик — закрыть
+  SEL_JOB = jobId; SEL_LOG_OFFSET = 0; LOG_EL.textContent = "";
   document.getElementById("taskspanel").classList.remove("collapsed");
-  refreshSelectedLog();
+  updateCollapseArrow();
+  pollTasks();   // немедленно перерисует список и подтянет лог под строкой
 }
 
 async function refreshSelectedLog() {
@@ -478,12 +503,11 @@ async function refreshSelectedLog() {
   try {
     const data = await api("GET", "/api/jobs/" + SEL_JOB + "?since=" + SEL_LOG_OFFSET);
     const job = data.job;
-    const pre = document.getElementById("tasklog");
     if (job.log && job.log.length) {
-      const atBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
-      pre.textContent += job.log.join("\n") + "\n";
+      const atBottom = LOG_EL.scrollHeight - LOG_EL.scrollTop - LOG_EL.clientHeight < 40;
+      LOG_EL.textContent += job.log.join("\n") + "\n";
       SEL_LOG_OFFSET = job.log_offset + job.log.length;
-      if (atBottom) pre.scrollTop = pre.scrollHeight;
+      if (atBottom) LOG_EL.scrollTop = LOG_EL.scrollHeight;
     }
   } catch (e) { /* игнор */ }
 }

@@ -221,6 +221,13 @@ def api_cancel_job(job_id: str):
     return {"ok": True}
 
 
+@app.delete("/api/jobs/{job_id}", dependencies=[Depends(require_auth)])
+def api_remove_job(job_id: str):
+    if not jobs.remove_job(job_id):
+        raise HTTPException(status_code=409, detail="Нельзя удалить активную задачу — сначала отмените")
+    return {"ok": True}
+
+
 @app.get("/api/status", dependencies=[Depends(require_auth)])
 def api_status():
     return health.environment_status()
