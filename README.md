@@ -244,10 +244,12 @@ Spotify, поэтому почти любой трек со Spotify есть и 
 > Скачивание из Deezer — серая зона (нарушает ToS Deezer), используется на свой
 > риск для личной библиотеки.
 
-## Zotify (320k реально со Spotify)
+## Spotify напрямую (320k через librespot)
 
-Zotify скачивает аудио **прямо со Spotify** через твой аккаунт (librespot). С
-Premium — 320 kbps Ogg Vorbis (максимум, что отдаёт Spotify; lossless он не даёт).
+Кнопка «Spotify 320k» качает аудио **прямо со Spotify** через твой аккаунт
+(librespot). С Premium — 320 kbps Ogg Vorbis (максимум, что отдаёт Spotify;
+lossless он не даёт). Метаданные/обложку/путь даёт spotdl, аудио — librespot
+**напрямую по track-id, минуя `api.spotify.com`** (иначе ловится 429 rate limit).
 Кнопка «Zotify 320k» у строки качает трек и кладёт в библиотеку как обычная
 загрузка. Находит **всё, что есть в Spotify** — идеальный фолбэк для отсутствующих
 на YouTube.

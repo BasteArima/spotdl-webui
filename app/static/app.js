@@ -153,7 +153,7 @@ function renderErrors() {
       const statusEl = el("span", { class: "rowstatus" }, [""]);
       const dlBtn = el("button", { class: "btn small" }, ["Скачать"]);
       const dzBtn = el("button", { class: "btn secondary small", title: "Скачать с Deezer по ISRC (нужен ARL) — для треков, которых нет на YouTube" }, ["Deezer"]);
-      const ztBtn = el("button", { class: "btn secondary small", title: "Скачать реально со Spotify через Zotify (320k с Premium). Нужны креды Spotify." }, ["Zotify 320k"]);
+      const ztBtn = el("button", { class: "btn secondary small", title: "Скачать напрямую со Spotify (librespot, 320k с Premium). Нужны креды Spotify." }, ["Spotify 320k"]);
       const fileInput = el("input", { type: "file", accept: "audio/*,.mp3,.flac,.m4a,.opus,.ogg,.wav", style: "display:none" });
       const fileBtn = el("button", { class: "btn secondary small", title: "Залить локальный файл — получит мету и обложку со Spotify" }, ["📁 Файл"]);
       const q = encodeURIComponent(t.song || "");
@@ -169,7 +169,7 @@ function renderErrors() {
       ROWS.push(row); groupRows.push(row);
       dlBtn.addEventListener("click", () => enqueueDownloads([row]));
       dzBtn.addEventListener("click", () => tryDeezer(row));
-      ztBtn.addEventListener("click", () => trySource(row, "/api/zotify", "Zotify"));
+      ztBtn.addEventListener("click", () => trySource(row, "/api/zotify", "Spotify"));
       fileBtn.addEventListener("click", () => fileInput.click());
       fileInput.addEventListener("change", () => {
         if (fileInput.files && fileInput.files[0]) uploadFile(row, fileInput.files[0]);

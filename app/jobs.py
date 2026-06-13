@@ -343,18 +343,18 @@ def _run_deezer(job: Job, spotify_url: str, safe: str) -> None:
     _queue_m3u_update(job, safe)
 
 
-def zotify_dl_args(spotify_url: str) -> List[str]:
+def spotify_dl_args(spotify_url: str) -> List[str]:
     return [
-        sys.executable, "-m", "app.zotify_dl",
+        sys.executable, "-m", "app.spotify_dl",
         spotify_url, config.OUTPUT_TEMPLATE, config.AUDIO_FORMAT, config.UPLOAD_BITRATE,
     ]
 
 
 def _run_zotify(job: Job, spotify_url: str, safe: str) -> None:
-    """Скачать трек реально со Spotify через Zotify (320k с Premium) и положить
-    в библиотеку. Источник для треков, которых нет на YouTube, и лучшего качества."""
-    job.append("=== Zotify: скачивание со Spotify ===")
-    rc, out = _run_process(job, zotify_dl_args(spotify_url), cwd="/app")
+    """Скачать трек напрямую со Spotify через librespot (320k с Premium) и
+    положить в библиотеку. Лучшее качество и обход api.spotify.com (429)."""
+    job.append("=== Spotify (librespot): скачивание ===")
+    rc, out = _run_process(job, spotify_dl_args(spotify_url), cwd="/app")
     ok = rc == 0 and any(line.startswith("OK ") for line in out)
     if not ok:
         job.status = "error"
