@@ -252,17 +252,23 @@ Premium — 320 kbps Ogg Vorbis (максимум, что отдаёт Spotify; 
 загрузка. Находит **всё, что есть в Spotify** — идеальный фолбэк для отсутствующих
 на YouTube.
 
-**Авторизация** (нужен Spotify-аккаунт, для 320k — Premium):
-- Предпочтительно — файл `credentials.json` (переиспользуемый токен librespot),
-  смонтированный как `/conf/zotify_credentials.json`. Сгенерировать один раз,
-  например на сервере:
-  ```sh
-  docker exec -it spotdl-webui python -m zotify \
-    --credentials-location /conf/zotify_credentials.json \
-    --save-credentials True -s "test"
-  ```
-  (пройти вход; дальше файл используется автоматически).
-- Либо задать `ZOTIFY_USERNAME`/`ZOTIFY_PASSWORD` в стеке (хуже — пароль в конфиге).
+**Авторизация — через OAuth** (нужен Spotify-аккаунт, для 320k — Premium).
+Подходит и для аккаунтов через Facebook/Google/Apple (у них нет пароля Spotify,
+а username/password Spotify для сторонних клиентов всё равно заблокировал).
+Генерируем переиспользуемый `credentials.json` один раз, прямо на сервере:
+
+```sh
+docker exec -it spotdl-webui python -m app.gen_zotify_creds /conf/zotify_credentials.json
+```
+
+1. Скрипт печатает ссылку — открой её в браузере на ПК и войди в Spotify
+   (кнопка «Continue with Facebook» там есть).
+2. Браузер откроет `http://127.0.0.1:5588/login?code=...` — страница НЕ загрузится,
+   это нормально. Скопируй значение после `code=` (или весь URL) и вставь в терминал.
+3. Скрипт сохранит `/conf/zotify_credentials.json` — дальше Zotify работает сам.
+
+> Вариант `ZOTIFY_USERNAME`/`ZOTIFY_PASSWORD` оставлен для аккаунтов с паролем, но
+> для Facebook-входа он не сработает — используй OAuth-генератор выше.
 
 **Риск и осторожность:**
 - Использование librespot нарушает ToS Spotify; **аккаунт могут забанить**,
@@ -440,6 +446,7 @@ app/
   deezer.py        скачивание+расшифровка трека с Deezer (requests+pycryptodome)
   deezer_dl.py     Deezer-фолбэк по ISRC (исп. deezer + library)
   zotify_dl.py     Zotify-фолбэк: реальное аудио со Spotify 320k (исп. library)
+  gen_zotify_creds.py  одноразовая генерация credentials.json через OAuth (FB-вход)
   jobs.py          две дорожки очереди, воркеры, лок, запуск spotdl, планировщик
   static/          index.html, app.js, style.css (тёмная SPA)
 Dockerfile                    самодостаточный образ (ffmpeg+spotdl+deno+app)
