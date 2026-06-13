@@ -32,6 +32,42 @@ APP_AUTH_TOKEN = os.environ.get("APP_AUTH_TOKEN", "")
 # Путь к исполняемому spotdl (в образе доступен в PATH)
 SPOTDL_BIN = os.environ.get("SPOTDL_BIN", "spotdl")
 
+# Deezer ARL (секрет уровня пароля) — для фолбэка по треккам, которых нет на
+# YouTube. Подаётся через env DEEZER_ARL или файл (в образ не попадает).
+DEEZER_ARL = os.environ.get("DEEZER_ARL", "")
+DEEZER_ARL_FILE = os.environ.get("DEEZER_ARL_FILE", os.path.join(CONF_DIR, "deezer_arl.txt"))
+
+
+def deezer_arl() -> str:
+    """ARL из окружения (приоритет) или из файла /conf/deezer_arl.txt."""
+    val = DEEZER_ARL.strip()
+    if val:
+        return val
+    try:
+        with open(DEEZER_ARL_FILE, "r", encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+# --- Zotify (реальное аудио со Spotify, 320k через Premium) -------------------
+# Креды: файл credentials.json (предпочтительно) ИЛИ логин/пароль Spotify.
+ZOTIFY_CREDENTIALS_FILE = os.environ.get(
+    "ZOTIFY_CREDENTIALS_FILE", os.path.join(CONF_DIR, "zotify_credentials.json"))
+ZOTIFY_USERNAME = os.environ.get("ZOTIFY_USERNAME", "")
+ZOTIFY_PASSWORD = os.environ.get("ZOTIFY_PASSWORD", "")
+# very_high=320k (нужен Premium), high=160k, normal=96k, auto=макс. для аккаунта
+ZOTIFY_QUALITY = os.environ.get("ZOTIFY_QUALITY", "very_high")
+# Качать со скоростью прослушивания (анти-бан, но медленно). По умолчанию выкл
+# для ручных одиночных треков; фоновый массовый апгрейд будет включать.
+ZOTIFY_REAL_TIME = os.environ.get("ZOTIFY_REAL_TIME", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def zotify_configured() -> bool:
+    if os.path.exists(ZOTIFY_CREDENTIALS_FILE):
+        return True
+    return bool(ZOTIFY_USERNAME.strip() and ZOTIFY_PASSWORD.strip())
+
 
 def _env_float(name: str, default: float) -> float:
     try:

@@ -152,6 +152,8 @@ function renderErrors() {
       const input = el("input", { type: "text", class: "yt-input", placeholder: "YouTube / YT-Music URL" });
       const statusEl = el("span", { class: "rowstatus" }, [""]);
       const dlBtn = el("button", { class: "btn small" }, ["Скачать"]);
+      const dzBtn = el("button", { class: "btn secondary small", title: "Скачать с Deezer по ISRC (нужен ARL) — для треков, которых нет на YouTube" }, ["Deezer"]);
+      const ztBtn = el("button", { class: "btn secondary small", title: "Скачать реально со Spotify через Zotify (320k с Premium). Нужны креды Spotify." }, ["Zotify 320k"]);
       const fileInput = el("input", { type: "file", accept: "audio/*,.mp3,.flac,.m4a,.opus,.ogg,.wav", style: "display:none" });
       const fileBtn = el("button", { class: "btn secondary small", title: "Залить локальный файл — получит мету и обложку со Spotify" }, ["📁 Файл"]);
       const q = encodeURIComponent(t.song || "");
@@ -161,11 +163,13 @@ function renderErrors() {
         el("td", {}, [el("a", { href: t.spotify_url, target: "_blank", rel: "noopener" }, ["Spotify ↗"])]),
         el("td", {}, [el("a", { href: "https://music.youtube.com/search?q=" + q, target: "_blank", rel: "noopener" }, ["искать на YT ↗"])]),
         el("td", {}, [input]),
-        el("td", {}, [el("div", { class: "row" }, [dlBtn, fileBtn, fileInput, statusEl])]),
+        el("td", {}, [el("div", { class: "row" }, [dlBtn, dzBtn, ztBtn, fileBtn, fileInput, statusEl])]),
       ]);
       const row = { spotify_url: t.spotify_url, safe: g.safe, input, statusEl, rowEl };
       ROWS.push(row); groupRows.push(row);
       dlBtn.addEventListener("click", () => enqueueDownloads([row]));
+      dzBtn.addEventListener("click", () => tryDeezer(row));
+      ztBtn.addEventListener("click", () => trySource(row, "/api/zotify", "Zotify"));
       fileBtn.addEventListener("click", () => fileInput.click());
       fileInput.addEventListener("change", () => {
         if (fileInput.files && fileInput.files[0]) uploadFile(row, fileInput.files[0]);
@@ -242,6 +246,23 @@ async function enqueueDownloads(rows) {
     pollTasks();
   } catch (e) { toast("Ошибка: " + e.message); }
 }
+
+// Попытка скачать трек из альтернативного источника (Deezer/Zotify).
+async function trySource(row, endpoint, label) {
+  row.statusEl.className = "rowstatus queued";
+  row.statusEl.textContent = ` ${label} в очереди`;
+  try {
+    const data = await api("POST", endpoint, { spotify_url: row.spotify_url, safe: row.safe });
+    PENDING.set(data.job.id, row);
+    toast(`Попытка ${label} в очереди`);
+    showTasks(); pollTasks();
+  } catch (e) {
+    row.statusEl.className = "rowstatus error";
+    row.statusEl.textContent = " " + e.message;
+    toast(`${label}: ${e.message}`);
+  }
+}
+function tryDeezer(row) { return trySource(row, "/api/deezer", "Deezer"); }
 
 // Залить локальный файл: получит мету/обложку со Spotify и ляжет в библиотеку.
 async function uploadFile(row, file) {

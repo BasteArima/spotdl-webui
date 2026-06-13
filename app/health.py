@@ -51,6 +51,8 @@ def environment_status() -> dict:
         "conf_writable": _writable(config.CONF_DIR),
         "deno": shutil.which("deno") is not None,
         "spotdl_version": _spotdl_ver(),
+        "deezer_configured": bool(config.deezer_arl()),
+        "zotify_configured": config.zotify_configured(),
     }
     # человекочитаемые предупреждения для баннера
     warnings = []

@@ -25,6 +25,13 @@ RUN set -eux; \
 # YouTube/yt-dlp; при необходимости закрепите версию здесь).
 RUN pip install --no-cache-dir spotdl
 
+# Zotify — реальное аудио со Spotify (librespot). В PyPI нет, ставим из git.
+# Не фатально: если репозиторий недоступен/сломан — образ всё равно соберётся,
+# просто фича Zotify будет недоступна (кнопка вернёт ошибку). Для воспроизводимости
+# можно закрепить на коммит (...@<sha>).
+RUN pip install --no-cache-dir "git+https://github.com/zotify-dev/zotify.git" \
+    || echo "[build] WARN: zotify install failed — feature will be unavailable"
+
 # Deno обязателен: без него загрузки с YouTube падают с AudioProviderError
 # ("Some YouTube downloads require Deno"). Кладём РЕАЛЬНЫЙ бинарь в /usr/local/bin
 # (mode 755) — НЕ симлинк в /root, иначе под uid 998 он недоступен и spotdl

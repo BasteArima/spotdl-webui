@@ -51,6 +51,8 @@ LANE_INTERACTIVE = "interactive"
 LANE_BACKGROUND = "background"
 _LANE_BY_KIND = {
     "download": LANE_INTERACTIVE,
+    "deezer": LANE_INTERACTIVE,      # фолбэк: скачать с Deezer по ISRC
+    "zotify": LANE_INTERACTIVE,      # реальное аудио со Spotify (320k)
     "upload": LANE_INTERACTIVE,      # заливка локального файла + мета со Spotify
     "sync": LANE_INTERACTIVE,        # ручной sync одного плейлиста / обновление m3u
     "retry": LANE_INTERACTIVE,
@@ -316,6 +318,52 @@ def _run_download_one(job: Job, spotify_url: str, youtube_url: str, safe: str) -
     _download_track(job, spotify_url, youtube_url, safe)
 
 
+def deezer_dl_args(spotify_url: str) -> List[str]:
+    return [
+        sys.executable, "-m", "app.deezer_dl",
+        spotify_url, config.OUTPUT_TEMPLATE, config.AUDIO_FORMAT, config.UPLOAD_BITRATE,
+    ]
+
+
+def _run_deezer(job: Job, spotify_url: str, safe: str) -> None:
+    """Скачать трек с Deezer по ISRC (точное совпадение со Spotify) и положить в
+    библиотеку. Для треков, которых нет на YouTube."""
+    job.append("=== попытка скачать с Deezer (по ISRC) ===")
+    rc, out = _run_process(job, deezer_dl_args(spotify_url), cwd="/app")
+    ok = rc == 0 and any(line.startswith("OK ") for line in out)
+    if not ok:
+        job.status = "error"
+        job.append("[error] Deezer не дал результата — трек оставлен в списке ненайденных")
+        return
+    if errors_parser.remove_track(safe, spotify_url):
+        job.append("[ok] скачано с Deezer, трек убран из errors-файла")
+    else:
+        job.append("[ok] скачано с Deezer (в errors-файле не найдено — возможно, уже убрано)")
+
+
+def zotify_dl_args(spotify_url: str) -> List[str]:
+    return [
+        sys.executable, "-m", "app.zotify_dl",
+        spotify_url, config.OUTPUT_TEMPLATE, config.AUDIO_FORMAT, config.UPLOAD_BITRATE,
+    ]
+
+
+def _run_zotify(job: Job, spotify_url: str, safe: str) -> None:
+    """Скачать трек реально со Spotify через Zotify (320k с Premium) и положить
+    в библиотеку. Источник для треков, которых нет на YouTube, и лучшего качества."""
+    job.append("=== Zotify: скачивание со Spotify ===")
+    rc, out = _run_process(job, zotify_dl_args(spotify_url), cwd="/app")
+    ok = rc == 0 and any(line.startswith("OK ") for line in out)
+    if not ok:
+        job.status = "error"
+        job.append("[error] Zotify не дал результата — трек оставлен в списке ненайденных")
+        return
+    if errors_parser.remove_track(safe, spotify_url):
+        job.append("[ok] скачано через Zotify, трек убран из errors-файла")
+    else:
+        job.append("[ok] скачано через Zotify (в errors не найдено — возможно, уже убрано)")
+
+
 def place_localfile_args(temp_path: str, spotify_url: str) -> List[str]:
     return [
         sys.executable, "-m", "app.place_localfile",
@@ -414,6 +462,18 @@ def _has_pending_sync_all() -> bool:
 def enqueue_download_one(spotify_url: str, youtube_url: str, safe: str) -> Job:
     job = Job("download", f"Скачивание трека ({safe})",
               lambda j: _run_download_one(j, spotify_url, youtube_url, safe))
+    return _enqueue(job)
+
+
+def enqueue_deezer(spotify_url: str, safe: str) -> Job:
+    job = Job("deezer", f"Deezer: {safe}",
+              lambda j: _run_deezer(j, spotify_url, safe))
+    return _enqueue(job)
+
+
+def enqueue_zotify(spotify_url: str, safe: str) -> Job:
+    job = Job("zotify", f"Zotify 320k: {safe}",
+              lambda j: _run_zotify(j, spotify_url, safe))
     return _enqueue(job)
 
 

@@ -167,6 +167,39 @@ def api_download_batch(body: DownloadBatchIn):
 _SPOTIFY_TRACK_RE = re.compile(r"open\.spotify\.com/track/", re.IGNORECASE)
 
 
+class DeezerIn(BaseModel):
+    spotify_url: str
+    safe: str
+
+
+@app.post("/api/deezer", dependencies=[Depends(require_auth)])
+def api_deezer(body: DeezerIn):
+    """Скачать трек с Deezer по ISRC (фолбэк для отсутствующих на YouTube)."""
+    sp = body.spotify_url.strip()
+    safe = body.safe.strip()
+    if not _SPOTIFY_TRACK_RE.search(sp):
+        raise HTTPException(status_code=400, detail="Нужна ссылка на трек Spotify (open.spotify.com/track/…)")
+    if not config.deezer_arl():
+        raise HTTPException(status_code=400, detail="Deezer ARL не настроен (DEEZER_ARL или /conf/deezer_arl.txt)")
+    job = jobs.enqueue_deezer(sp, safe)
+    sync = jobs.enqueue_sync_for_m3u(safe) if safe else None
+    return {"job": job.to_dict(), "sync": sync.to_dict() if sync else None}
+
+
+@app.post("/api/zotify", dependencies=[Depends(require_auth)])
+def api_zotify(body: DeezerIn):
+    """Скачать трек реально со Spotify через Zotify (320k с Premium)."""
+    sp = body.spotify_url.strip()
+    safe = body.safe.strip()
+    if not _SPOTIFY_TRACK_RE.search(sp):
+        raise HTTPException(status_code=400, detail="Нужна ссылка на трек Spotify (open.spotify.com/track/…)")
+    if not config.zotify_configured():
+        raise HTTPException(status_code=400, detail="Zotify не настроен (нет credentials.json или логина/пароля Spotify)")
+    job = jobs.enqueue_zotify(sp, safe)
+    sync = jobs.enqueue_sync_for_m3u(safe) if safe else None
+    return {"job": job.to_dict(), "sync": sync.to_dict() if sync else None}
+
+
 @app.post("/api/upload", dependencies=[Depends(require_auth)])
 async def api_upload(
     spotify_url: str = Form(...),
