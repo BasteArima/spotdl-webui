@@ -76,6 +76,7 @@ class Job:
         self.finished: Optional[float] = None
         self.returncode: Optional[int] = None
         self.cancelled = False
+        self.target: Optional[str] = None  # safe плейлиста (для дедупа sync-задач)
         self._lock = threading.Lock()
 
     def append(self, text: str) -> None:
@@ -339,6 +340,7 @@ def _run_deezer(job: Job, spotify_url: str, safe: str) -> None:
         job.append("[ok] скачано с Deezer, трек убран из errors-файла")
     else:
         job.append("[ok] скачано с Deezer (в errors-файле не найдено — возможно, уже убрано)")
+    _queue_m3u_update(job, safe)
 
 
 def zotify_dl_args(spotify_url: str) -> List[str]:
@@ -362,6 +364,7 @@ def _run_zotify(job: Job, spotify_url: str, safe: str) -> None:
         job.append("[ok] скачано через Zotify, трек убран из errors-файла")
     else:
         job.append("[ok] скачано через Zotify (в errors не найдено — возможно, уже убрано)")
+    _queue_m3u_update(job, safe)
 
 
 def place_localfile_args(temp_path: str, spotify_url: str) -> List[str]:
@@ -391,6 +394,33 @@ def _run_upload(job: Job, temp_path: str, spotify_url: str, safe: str, orig_name
         job.append("[ok] файл размещён, трек убран из errors-файла")
     else:
         job.append("[ok] файл размещён (в errors-файле не найден — возможно, уже убран)")
+    _queue_m3u_update(job, safe)
+
+
+def _pending_sync_exists(safe: str) -> bool:
+    """Есть ли уже незавершённый sync, который обновит m3u этого плейлиста
+    (отдельный sync того же плейлиста, либо sync-всех/автосинк — они покрывают всё)."""
+    with _jobs_lock:
+        for jid in _jobs_order:
+            j = _jobs[jid]
+            if j.status not in ("queued", "running"):
+                continue
+            if j.kind in ("sync-all", "autosync"):
+                return True
+            if j.kind == "sync" and j.target == safe:
+                return True
+    return False
+
+
+def _queue_m3u_update(job: Job, safe: str) -> None:
+    """Поставить ОДИН sync плейлиста для добивания трека в m3u (без дублей)."""
+    if not safe:
+        return
+    if _pending_sync_exists(safe):
+        job.append(f"[info] обновление m3u '{safe}' уже запланировано — не дублирую")
+        return
+    enqueue_sync_for_m3u(safe)
+    job.append(f"[info] плейлист '{safe}' поставлен в очередь на обновление m3u")
 
 
 def _run_sync_for_m3u(job: Job, safe: str) -> None:
@@ -486,6 +516,7 @@ def enqueue_upload(temp_path: str, spotify_url: str, safe: str, orig_name: str) 
 def enqueue_sync_for_m3u(safe: str) -> Job:
     job = Job("sync", f"Обновление m3u: {safe}",
               lambda j: _run_sync_for_m3u(j, safe))
+    job.target = safe
     return _enqueue(job)
 
 
