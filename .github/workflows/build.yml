@@ -1,7 +1,12 @@
 name: build-and-push
 
-# Собирает Docker-образ и публикует его в GitHub Container Registry (GHCR)
-# при каждом push в main/master. Вручную — через кнопку Run workflow.
+# Собирает Docker-образ и публикует в GHCR при push в main/master.
+#
+# Используется обычный `docker build` (BuildKit встроен в раннер) + inline-кэш
+# из самого GHCR. Это НЕ требует docker/setup-buildx-action, который тянет образ
+# moby/buildkit с Docker Hub и иногда падает по таймауту (context deadline
+# exceeded к auth.docker.io). Так сборка не зависит от флакости Docker Hub, а
+# кэш слоёв между прогонами сохраняется через предыдущий :latest.
 on:
   push:
     branches: [main, master]
@@ -17,43 +22,34 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      DOCKER_BUILDKIT: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
-
       - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Имя образа = ghcr.io/<owner>/<repo>, приводится к нижнему регистру автоматически.
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=raw,value=latest
-            type=sha,format=short
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+        run: |
+          set -eu
+          IMAGE="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          SHA="${GITHUB_SHA::7}"
+          echo "Image: $IMAGE  (tags: latest, $SHA)"
+          # тёплый кэш: подтягиваем прошлый образ как источник слоёв (не критично)
+          docker pull "$IMAGE:latest" || true
+          docker build \
+            --cache-from "$IMAGE:latest" \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            -t "$IMAGE:latest" \
+            -t "$IMAGE:$SHA" \
+            .
+          docker push "$IMAGE:latest"
+          docker push "$IMAGE:$SHA"
 
-      # Необязательно: автоперезапуск стека в Portainer сразу после сборки.
-      # Чтобы включить — создайте webhook у стека в Portainer (Stack -> Webhooks)
-      # и добавьте его URL в Secrets репозитория как PORTAINER_WEBHOOK.
+      # Необязательно: автоперезапуск стека в Portainer после сборки.
+      # Создай webhook у стека (Stack -> Webhooks) и добавь URL в Secrets как PORTAINER_WEBHOOK.
       - name: Trigger Portainer redeploy (optional)
         env:
           HOOK: ${{ secrets.PORTAINER_WEBHOOK }}

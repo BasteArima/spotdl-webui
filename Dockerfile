@@ -18,19 +18,19 @@ ENV PYTHONUNBUFFERED=1 \
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
-        ffmpeg ca-certificates curl unzip gosu tini; \
+        ffmpeg ca-certificates curl unzip gosu tini git; \
     rm -rf /var/lib/apt/lists/*
 
 # spotdl (не закреплён по версии — пересборка подтягивает свежий с фиксами
 # YouTube/yt-dlp; при необходимости закрепите версию здесь).
 RUN pip install --no-cache-dir spotdl
 
-# Zotify — реальное аудио со Spotify (librespot). В PyPI нет, ставим из git.
-# Не фатально: если репозиторий недоступен/сломан — образ всё равно соберётся,
-# просто фича Zotify будет недоступна (кнопка вернёт ошибку). Для воспроизводимости
-# можно закрепить на коммит (...@<sha>).
+# Zotify — реальное аудио со Spotify (librespot). В PyPI нет, ставим из git
+# (нужен git, добавлен в apt выше). Фатально + проверка импорта: если не
+# установится — сборка упадёт явно, а не оставит образ без zotify незаметно.
+# Для воспроизводимости можно закрепить на коммит (...@<sha>).
 RUN pip install --no-cache-dir "git+https://github.com/zotify-dev/zotify.git" \
-    || echo "[build] WARN: zotify install failed — feature will be unavailable"
+    && python -c "import zotify; print('zotify installed OK')"
 
 # Deno обязателен: без него загрузки с YouTube падают с AudioProviderError
 # ("Some YouTube downloads require Deno"). Кладём РЕАЛЬНЫЙ бинарь в /usr/local/bin
