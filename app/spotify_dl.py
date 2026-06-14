@@ -25,9 +25,10 @@ def _track_id_from_url(url: str) -> str:
 
 def main() -> None:
     if len(sys.argv) < 5:
-        print("usage: spotify_dl <spotify_url> <template> <format> <bitrate>", file=sys.stderr)
+        print("usage: spotify_dl <spotify_url> <template> <format> <bitrate> [safe]", file=sys.stderr)
         sys.exit(2)
     spotify_url, template, fmt, bitrate = sys.argv[1:5]
+    safe = sys.argv[5] if len(sys.argv) > 5 else ""
 
     from app import config, library
 
@@ -80,9 +81,10 @@ def main() -> None:
 
     library.init_spotify()
     song = library.fetch_song(spotify_url)
+    m3u = config.m3u_path(safe) if safe else None
     try:
         out = library.place_file(ogg, song, template, fmt, bitrate,
-                                 log=lambda m: print(m, flush=True))
+                                 log=lambda m: print(m, flush=True), m3u_path=m3u)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
     print(f"OK {out}", flush=True)

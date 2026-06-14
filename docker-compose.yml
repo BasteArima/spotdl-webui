@@ -20,7 +20,9 @@ services:
       # Zotify (реальное аудио со Spotify, 320k с Premium). Лучше положить
       # /conf/zotify_credentials.json. Параметры по желанию:
       # - ZOTIFY_QUALITY=very_high
-      # - ZOTIFY_REAL_TIME=false
+      # - ZOTIFY_SAFE_MODE=true        # паузы между Spotify-загрузками (анти-бан)
+      # - ZOTIFY_GAP_MIN=20            # мин. секунд между загрузками
+      # - ZOTIFY_GAP_MAX=45            # макс. секунд между загрузками
     volumes:
       - "/srv/dev-disk-by-uuid-6c40d758-c9b4-46dc-a0b1-84826fd43804/data/spotdl:/conf"
       - "/srv/dev-disk-by-uuid-be7624de-4d24-4133-b0b5-8e3cd8548788/storage/music:/music"

@@ -58,6 +58,19 @@ ZOTIFY_USERNAME = os.environ.get("ZOTIFY_USERNAME", "")
 ZOTIFY_PASSWORD = os.environ.get("ZOTIFY_PASSWORD", "")
 # very_high=320k (нужен Premium), high=160k, normal=96k, auto=макс. для аккаунта
 ZOTIFY_QUALITY = os.environ.get("ZOTIFY_QUALITY", "very_high")
+# Безопасный режим: пауза между Spotify-загрузками (анти-бан). Включён по умолчанию.
+ZOTIFY_SAFE_MODE = os.environ.get("ZOTIFY_SAFE_MODE", "true").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+ZOTIFY_GAP_MIN = _float_env("ZOTIFY_GAP_MIN", 20.0)   # мин. секунд между загрузками
+ZOTIFY_GAP_MAX = _float_env("ZOTIFY_GAP_MAX", 45.0)   # макс. секунд между загрузками
 # Качать со скоростью прослушивания (анти-бан, но медленно). По умолчанию выкл
 # для ручных одиночных треков; фоновый массовый апгрейд будет включать.
 ZOTIFY_REAL_TIME = os.environ.get("ZOTIFY_REAL_TIME", "").strip().lower() in ("1", "true", "yes", "on")

@@ -27,9 +27,50 @@ def fetch_song(spotify_url: str):
     return Song.from_url(spotify_url)
 
 
-def place_file(input_path: str, song, template: str, fmt: str, bitrate: str, log=print) -> str:
+def append_to_m3u(out_path: str, song, m3u_path: str, template: str, fmt: str, log=print) -> None:
+    """Дописать один трек в m3u-плейлист — без полного spotdl sync.
+    Строку #EXTINF берём из той же функции spotdl (формат совпадает), а путь —
+    реальный абсолютный путь записанного файла (out_path). Дубли не добавляем."""
+    import os
+
+    from spotdl.utils.m3u import create_m3u_content
+
+    extinf = ""
+    try:
+        content = create_m3u_content([song], template, fmt)
+        for line in content.splitlines():
+            if line.startswith("#EXTINF"):
+                extinf = line
+                break
+    except Exception:  # noqa: BLE001 — без #EXTINF тоже валидно
+        extinf = ""
+
+    existing = ""
+    if os.path.exists(m3u_path):
+        with open(m3u_path, "r", encoding="utf-8", errors="replace") as fh:
+            existing = fh.read()
+    else:
+        os.makedirs(os.path.dirname(m3u_path) or ".", exist_ok=True)
+        existing = "#EXTM3U\n"
+
+    # уже в плейлисте — ничего не делаем
+    if out_path in existing.splitlines():
+        log(f"[m3u] трек уже в плейлисте — пропускаю")
+        return
+
+    if not existing.endswith("\n"):
+        existing += "\n"
+    block = (extinf + "\n" if extinf else "") + out_path + "\n"
+    with open(m3u_path, "w", encoding="utf-8") as fh:
+        fh.write(existing + block)
+    log(f"[m3u] трек добавлен в {os.path.basename(m3u_path)}")
+
+
+def place_file(input_path: str, song, template: str, fmt: str, bitrate: str,
+               log=print, m3u_path: str = None) -> str:
     """Конвертирует input_path в формат библиотеки, кладёт по шаблону и вшивает
-    метаданные/обложку из song. Возвращает итоговый путь."""
+    метаданные/обложку из song. Если задан m3u_path — дописывает трек в плейлист
+    (без полного sync). Возвращает итоговый путь."""
     from spotdl.utils.formatter import create_file_name
     from spotdl.utils.ffmpeg import convert
     from spotdl.utils.metadata import embed_metadata
@@ -55,4 +96,10 @@ def place_file(input_path: str, song, template: str, fmt: str, bitrate: str, log
 
     log("[meta] вшиваю теги и обложку")
     embed_metadata(out, song)
+
+    if m3u_path:
+        try:
+            append_to_m3u(str(out), song, m3u_path, template, fmt, log=log)
+        except Exception as exc:  # noqa: BLE001 — m3u не критичен для самого файла
+            log(f"[m3u] не удалось обновить плейлист: {exc}")
     return str(out)

@@ -31,8 +31,26 @@ function showApp() {
   document.getElementById("appmain").style.display = "block";
   loadErrors();
   loadStatus();
+  loadSettings();
   startTaskPolling();
 }
+
+// безопасный режим (паузы между Spotify-загрузками)
+async function loadSettings() {
+  try {
+    const s = await api("GET", "/api/settings");
+    document.getElementById("safe-mode-toggle").checked = !!s.safe_mode;
+  } catch (e) { /* игнор */ }
+}
+document.getElementById("safe-mode-toggle").addEventListener("change", async (e) => {
+  try {
+    const s = await api("POST", "/api/settings", { safe_mode: e.target.checked });
+    toast(s.safe_mode ? "Безопасный режим включён (паузы между загрузками)" : "Безопасный режим выключен");
+  } catch (err) {
+    toast("Ошибка: " + err.message);
+    e.target.checked = !e.target.checked;  // откатить визуально
+  }
+});
 
 // ------------------------------------------------------------------ статус окружения
 async function loadStatus() {
@@ -104,6 +122,7 @@ document.querySelectorAll("nav button").forEach(b => {
     document.getElementById("view-" + view).classList.add("active");
     if (view === "errors") loadErrors();
     if (view === "playlists") loadPlaylists();
+    if (view === "upgrade") loadUpgrade();
     if (view === "jobs") loadJobs();
   });
 });
@@ -178,10 +197,8 @@ function renderErrors() {
       tbody.appendChild(rowEl);
     });
 
-    const dlGroupBtn = el("button", { class: "btn small" }, ["Скачать все с источником"]);
-    dlGroupBtn.addEventListener("click", () => enqueueDownloads(groupRows.filter(r => r.input.value.trim())));
-    const retryBtn = el("button", { class: "btn secondary small" }, ["Авто-повтор (YTM/YT/SoundCloud)"]);
-    retryBtn.addEventListener("click", () => doRetry(g.safe, retryBtn));
+    const dlGroupBtn = el("button", { class: "btn small", title: "Скачать все треки этого плейлиста выбранным сверху источником" }, ["Скачать все"]);
+    dlGroupBtn.addEventListener("click", () => bulkDownload(groupRows));
 
     cont.appendChild(el("div", { class: "card" }, [
       el("div", { class: "row", style: "justify-content:space-between;margin-bottom:10px" }, [
@@ -189,7 +206,7 @@ function renderErrors() {
           el("strong", {}, [g.safe]),
           el("span", { class: "muted small" }, ["  " + tracks.length + " трек(ов)" + (g.timestamp ? " • " + g.timestamp : "")]),
         ]),
-        el("div", { class: "row" }, [dlGroupBtn, retryBtn]),
+        el("div", { class: "row" }, [dlGroupBtn]),
       ]),
       el("table", {}, [
         el("thead", {}, [el("tr", {}, [
@@ -291,21 +308,25 @@ async function uploadFile(row, file) {
   }
 }
 
-async function doRetry(safe, btn) {
-  btn.disabled = true;
-  try {
-    await api("POST", "/api/retry", { safe });
-    toast("Авто-повтор поставлен в очередь");
-    showTasks(); pollTasks();
-  } catch (e) { toast("Ошибка: " + e.message); }
-  finally { btn.disabled = false; }
-}
-
 document.getElementById("err-filter").addEventListener("input", renderErrors);
 document.getElementById("err-playlist-filter").addEventListener("change", renderErrors);
 document.getElementById("err-reload").addEventListener("click", () => { loadErrors(); loadStatus(); });
-document.getElementById("err-download-all").addEventListener("click",
-  () => enqueueDownloads(ROWS.filter(r => r.input.value.trim())));
+document.getElementById("err-download-all").addEventListener("click", () => bulkDownload(ROWS));
+
+// Массовое скачивание выбранным источником (dropdown #dl-mode).
+function bulkDownload(rows) {
+  rows = rows || [];
+  const mode = document.getElementById("dl-mode").value;
+  if (mode === "url") {
+    enqueueDownloads(rows.filter(r => r.input.value.trim()));
+    return;
+  }
+  const endpoint = mode === "deezer" ? "/api/deezer" : "/api/zotify";
+  const label = mode === "deezer" ? "Deezer" : "Spotify 320k";
+  if (!rows.length) { toast("Нет треков"); return; }
+  if (!confirm(`Поставить в очередь ${rows.length} трек(ов) через ${label}?`)) return;
+  rows.forEach(r => trySource(r, endpoint, label));
+}
 
 // ------------------------------------------------------------------ плейлисты
 let EDIT_URL = null;
@@ -385,6 +406,56 @@ async function loadJobs() {
   } catch (e) { toast("Ошибка: " + e.message); }
 }
 document.getElementById("jobs-reload").addEventListener("click", loadJobs);
+
+// ------------------------------------------------------------------ апгрейд 320k
+let UPG_TIMER = null;
+function fmtEta(sec) {
+  if (sec == null) return "—";
+  if (sec < 3600) return Math.round(sec / 60) + " мин";
+  if (sec < 86400) return (sec / 3600).toFixed(1) + " ч";
+  return (sec / 86400).toFixed(1) + " дн";
+}
+async function loadUpgrade() {
+  clearTimeout(UPG_TIMER);
+  let s;
+  try { s = await api("GET", "/api/upgrade/status"); }
+  catch (e) { document.getElementById("upg-progress").textContent = "Ошибка: " + e.message; return; }
+  renderUpgrade(s);
+  if ((s.state === "running" || s.state === "stopping") &&
+      document.getElementById("view-upgrade").classList.contains("active")) {
+    UPG_TIMER = setTimeout(loadUpgrade, 2000);
+  }
+}
+function renderUpgrade(s) {
+  const cont = document.getElementById("upg-progress");
+  const processed = s.done + s.failed + s.skipped;
+  const pct = s.total ? Math.round(processed / s.total * 100) : 0;
+  const stateLabel = { idle: "ожидание", running: "идёт", stopping: "останавливается…", stopped: "остановлен" }[s.state] || s.state;
+  cont.innerHTML = "";
+  cont.appendChild(el("div", { class: "row", style: "gap:18px;flex-wrap:wrap;margin-bottom:8px" }, [
+    el("span", {}, [el("span", { class: "muted" }, ["Статус: "]), el("strong", {}, [stateLabel])]),
+    el("span", {}, [el("span", { class: "muted" }, ["Улучшено всего: "]), el("strong", {}, [String(s.upgraded_total)])]),
+  ]));
+  const fill = el("div", { style: `height:100%;width:${pct}%;background:var(--accent);transition:width .3s` }, []);
+  cont.appendChild(el("div", { style: "background:var(--bg);border:1px solid var(--border);border-radius:6px;height:14px;overflow:hidden;margin:8px 0" }, [fill]));
+  cont.appendChild(el("div", { class: "row small muted", style: "gap:18px;flex-wrap:wrap" }, [
+    el("span", {}, [`${processed} / ${s.total} (${pct}%)`]),
+    el("span", {}, [`готово: ${s.done}`]),
+    el("span", {}, [`пропущено: ${s.skipped}`]),
+    el("span", {}, [`ошибок: ${s.failed}`]),
+    el("span", {}, [`осталось ~${fmtEta(s.eta_seconds)}`]),
+  ]));
+  if (s.current) cont.appendChild(el("div", { class: "small", style: "margin-top:8px" }, [el("span", { class: "muted" }, ["Сейчас: "]), s.current]));
+}
+document.getElementById("upg-start").addEventListener("click", async () => {
+  if (!confirm("Запустить апгрейд всей библиотеки до 320k? Идёт медленно (дни), можно остановить в любой момент.")) return;
+  try { await api("POST", "/api/upgrade/start"); toast("Апгрейд запущен"); loadUpgrade(); }
+  catch (e) { toast("Ошибка: " + e.message); }
+});
+document.getElementById("upg-stop").addEventListener("click", async () => {
+  try { await api("POST", "/api/upgrade/stop"); toast("Останавливаю…"); loadUpgrade(); }
+  catch (e) { toast("Ошибка: " + e.message); }
+});
 
 document.getElementById("syncall-btn").addEventListener("click", async () => {
   if (!confirm("Запустить синхронизацию всех плейлистов? Это может занять много времени.")) return;

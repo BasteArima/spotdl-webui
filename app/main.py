@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, errors_parser, health, jobs, playlists
+from . import config, errors_parser, health, jobs, playlists, settings, upgrade
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
@@ -259,6 +259,40 @@ def api_remove_job(job_id: str):
 @app.get("/api/status", dependencies=[Depends(require_auth)])
 def api_status():
     return health.environment_status()
+
+
+class SettingsIn(BaseModel):
+    safe_mode: bool
+
+
+@app.get("/api/settings", dependencies=[Depends(require_auth)])
+def api_get_settings():
+    return settings.all_settings()
+
+
+@app.post("/api/settings", dependencies=[Depends(require_auth)])
+def api_set_settings(body: SettingsIn):
+    return {"safe_mode": settings.set_safe_mode(body.safe_mode)}
+
+
+# ---- массовый апгрейд качества (Step 2) ----
+@app.get("/api/upgrade/status", dependencies=[Depends(require_auth)])
+def api_upgrade_status():
+    return upgrade.controller.status()
+
+
+@app.post("/api/upgrade/start", dependencies=[Depends(require_auth)])
+def api_upgrade_start():
+    if not config.zotify_configured():
+        raise HTTPException(status_code=400, detail="Сначала настройте Spotify (credentials.json)")
+    started = upgrade.controller.start()
+    return {"started": started, "status": upgrade.controller.status()}
+
+
+@app.post("/api/upgrade/stop", dependencies=[Depends(require_auth)])
+def api_upgrade_stop():
+    upgrade.controller.stop()
+    return {"status": upgrade.controller.status()}
 
 
 @app.get("/api/jobs/{job_id}", dependencies=[Depends(require_auth)])

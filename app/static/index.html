@@ -26,9 +26,13 @@
     <nav>
       <button data-view="errors" class="active">Ненайденные</button>
       <button data-view="playlists">Плейлисты</button>
+      <button data-view="upgrade">Апгрейд 320k</button>
       <button data-view="jobs">Задачи</button>
     </nav>
     <span class="spacer"></span>
+    <label class="small muted" id="safe-mode-label" title="Паузы между загрузками со Spotify (анти-бан). Рекомендуется при массовом скачивании." style="display:flex;align-items:center;gap:6px;cursor:pointer">
+      <input type="checkbox" id="safe-mode-toggle"> Безопасный режим
+    </label>
     <button class="btn secondary" id="syncall-btn">Синхронизировать всё</button>
     <button class="btn secondary" id="logout-btn">Выйти</button>
   </header>
@@ -42,7 +46,13 @@
         <select id="err-playlist-filter"><option value="">Все плейлисты</option></select>
         <span class="muted small" id="err-total"></span>
         <span class="spacer" style="flex:1"></span>
-        <button class="btn" id="err-download-all">Скачать все с источником</button>
+        <label class="muted small">Источник:</label>
+        <select id="dl-mode" title="Откуда брать аудио при «Скачать все»">
+          <option value="url">из поля URL</option>
+          <option value="deezer">Deezer (по ISRC)</option>
+          <option value="spotify">Spotify 320k</option>
+        </select>
+        <button class="btn" id="err-download-all">Скачать все</button>
         <button class="btn secondary" id="err-reload">Обновить</button>
       </div>
       <div id="errors-container"></div>
@@ -59,6 +69,27 @@
           <thead><tr><th>Имя</th><th>Тип</th><th>Ссылка</th><th style="width:1%"></th></tr></thead>
           <tbody></tbody>
         </table>
+      </div>
+    </section>
+
+    <!-- ============ Апгрейд 320k ============ -->
+    <section class="view" id="view-upgrade">
+      <div class="card">
+        <div class="row" style="justify-content:space-between; align-items:flex-start">
+          <div>
+            <strong>Апгрейд качества до 320k</strong>
+            <div class="muted small" style="max-width:560px; margin-top:4px">
+              Постепенно заменяет треки библиотеки (YouTube/Deezer) на 320k со Spotify.
+              Идёт медленно (безопасный режим, паузы между загрузками), переживает
+              рестарт и не качает повторно уже улучшенные. Можно остановить в любой момент.
+            </div>
+          </div>
+          <div class="row">
+            <button class="btn" id="upg-start">▶ Старт</button>
+            <button class="btn danger" id="upg-stop">■ Стоп</button>
+          </div>
+        </div>
+        <div id="upg-progress" style="margin-top:16px"></div>
       </div>
     </section>
 

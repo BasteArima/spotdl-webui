@@ -12,9 +12,10 @@ import sys
 
 def main() -> None:
     if len(sys.argv) < 5:
-        print("usage: deezer_dl <spotify_url> <template> <format> <bitrate>", file=sys.stderr)
+        print("usage: deezer_dl <spotify_url> <template> <format> <bitrate> [safe]", file=sys.stderr)
         sys.exit(2)
     spotify_url, template, fmt, bitrate = sys.argv[1:5]
+    safe = sys.argv[5] if len(sys.argv) > 5 else ""
 
     from app import config, deezer, library
 
@@ -36,9 +37,10 @@ def main() -> None:
     tmp, dz_fmt = deezer.download_by_isrc(song.isrc, arl, config.UPLOADS_DIR)
     print(f"[deezer] скачано ({dz_fmt}): {tmp}", flush=True)
 
+    m3u = config.m3u_path(safe) if safe else None
     try:
         out = library.place_file(tmp, song, template, fmt, bitrate,
-                                 log=lambda m: print(m, flush=True))
+                                 log=lambda m: print(m, flush=True), m3u_path=m3u)
     finally:
         try:
             os.remove(tmp)

@@ -14,6 +14,7 @@
 """
 import os
 import queue
+import random
 import subprocess
 import sys
 import threading
@@ -319,10 +320,10 @@ def _run_download_one(job: Job, spotify_url: str, youtube_url: str, safe: str) -
     _download_track(job, spotify_url, youtube_url, safe)
 
 
-def deezer_dl_args(spotify_url: str) -> List[str]:
+def deezer_dl_args(spotify_url: str, safe: str = "") -> List[str]:
     return [
         sys.executable, "-m", "app.deezer_dl",
-        spotify_url, config.OUTPUT_TEMPLATE, config.AUDIO_FORMAT, config.UPLOAD_BITRATE,
+        spotify_url, config.OUTPUT_TEMPLATE, config.AUDIO_FORMAT, config.UPLOAD_BITRATE, safe,
     ]
 
 
@@ -330,7 +331,7 @@ def _run_deezer(job: Job, spotify_url: str, safe: str) -> None:
     """Скачать трек с Deezer по ISRC (точное совпадение со Spotify) и положить в
     библиотеку. Для треков, которых нет на YouTube."""
     job.append("=== попытка скачать с Deezer (по ISRC) ===")
-    rc, out = _run_process(job, deezer_dl_args(spotify_url), cwd="/app")
+    rc, out = _run_process(job, deezer_dl_args(spotify_url, safe), cwd="/app")
     ok = rc == 0 and any(line.startswith("OK ") for line in out)
     if not ok:
         job.status = "error"
@@ -340,38 +341,67 @@ def _run_deezer(job: Job, spotify_url: str, safe: str) -> None:
         job.append("[ok] скачано с Deezer, трек убран из errors-файла")
     else:
         job.append("[ok] скачано с Deezer (в errors-файле не найдено — возможно, уже убрано)")
-    _queue_m3u_update(job, safe)
 
 
-def spotify_dl_args(spotify_url: str) -> List[str]:
+def spotify_dl_args(spotify_url: str, safe: str = "") -> List[str]:
     return [
         sys.executable, "-m", "app.spotify_dl",
-        spotify_url, config.OUTPUT_TEMPLATE, config.AUDIO_FORMAT, config.UPLOAD_BITRATE,
+        spotify_url, config.OUTPUT_TEMPLATE, config.AUDIO_FORMAT, config.UPLOAD_BITRATE, safe,
     ]
+
+
+_last_spotify_dl = 0.0  # время старта последней Spotify-загрузки (для пауз)
+_throttle_lock = threading.Lock()
+
+
+def spotify_throttle(is_cancelled=None, log=None) -> None:
+    """Безопасный режим: выдержать паузу между Spotify-загрузками (анти-бан).
+    Пауза считается от старта прошлой загрузки → одиночный трек после простоя не
+    ждёт, а массовая закачка идёт размеренно. Общая для ручных и массовых задач,
+    поэтому суммарная скорость ограничена. is_cancelled/log — опциональны."""
+    from . import settings
+    global _last_spotify_dl
+    with _throttle_lock:
+        if not settings.get_safe_mode():
+            _last_spotify_dl = time.time()
+            return
+        gap = random.uniform(config.ZOTIFY_GAP_MIN, config.ZOTIFY_GAP_MAX)
+        end = _last_spotify_dl + gap
+        if end > time.time():
+            if log:
+                log(f"[safe] безопасный режим: пауза ~{int(end - time.time())}с перед загрузкой")
+            while time.time() < end:
+                if is_cancelled and is_cancelled():
+                    return
+                time.sleep(min(2.0, max(0.0, end - time.time())))
+        _last_spotify_dl = time.time()
 
 
 def _run_zotify(job: Job, spotify_url: str, safe: str) -> None:
     """Скачать трек напрямую со Spotify через librespot (320k с Premium) и
     положить в библиотеку. Лучшее качество и обход api.spotify.com (429)."""
+    spotify_throttle(lambda: job.cancelled, job.append)
+    if job.cancelled:
+        job.append("[cancelled] отменено во время паузы")
+        return
     job.append("=== Spotify (librespot): скачивание ===")
-    rc, out = _run_process(job, spotify_dl_args(spotify_url), cwd="/app")
+    rc, out = _run_process(job, spotify_dl_args(spotify_url, safe), cwd="/app")
     ok = rc == 0 and any(line.startswith("OK ") for line in out)
     if not ok:
         job.status = "error"
         job.append("[error] Zotify не дал результата — трек оставлен в списке ненайденных")
         return
     if errors_parser.remove_track(safe, spotify_url):
-        job.append("[ok] скачано через Zotify, трек убран из errors-файла")
+        job.append("[ok] скачано со Spotify, трек убран из errors-файла")
     else:
-        job.append("[ok] скачано через Zotify (в errors не найдено — возможно, уже убрано)")
-    _queue_m3u_update(job, safe)
+        job.append("[ok] скачано со Spotify (в errors не найдено — возможно, уже убрано)")
 
 
-def place_localfile_args(temp_path: str, spotify_url: str) -> List[str]:
+def place_localfile_args(temp_path: str, spotify_url: str, safe: str = "") -> List[str]:
     return [
         sys.executable, "-m", "app.place_localfile",
         temp_path, spotify_url, config.OUTPUT_TEMPLATE,
-        config.AUDIO_FORMAT, config.UPLOAD_BITRATE,
+        config.AUDIO_FORMAT, config.UPLOAD_BITRATE, safe,
     ]
 
 
@@ -380,7 +410,7 @@ def _run_upload(job: Job, temp_path: str, spotify_url: str, safe: str, orig_name
     обложка со Spotify, размещение по тому же шаблону пути, что и обычная загрузка.
     То же, что spotdl делает после скачивания аудио — только источник локальный."""
     job.append(f"=== заливка локального файла: {orig_name} ===")
-    rc, out = _run_process(job, place_localfile_args(temp_path, spotify_url), cwd="/app")
+    rc, out = _run_process(job, place_localfile_args(temp_path, spotify_url, safe), cwd="/app")
     try:
         os.remove(temp_path)
     except OSError:
@@ -394,33 +424,6 @@ def _run_upload(job: Job, temp_path: str, spotify_url: str, safe: str, orig_name
         job.append("[ok] файл размещён, трек убран из errors-файла")
     else:
         job.append("[ok] файл размещён (в errors-файле не найден — возможно, уже убран)")
-    _queue_m3u_update(job, safe)
-
-
-def _pending_sync_exists(safe: str) -> bool:
-    """Есть ли уже незавершённый sync, который обновит m3u этого плейлиста
-    (отдельный sync того же плейлиста, либо sync-всех/автосинк — они покрывают всё)."""
-    with _jobs_lock:
-        for jid in _jobs_order:
-            j = _jobs[jid]
-            if j.status not in ("queued", "running"):
-                continue
-            if j.kind in ("sync-all", "autosync"):
-                return True
-            if j.kind == "sync" and j.target == safe:
-                return True
-    return False
-
-
-def _queue_m3u_update(job: Job, safe: str) -> None:
-    """Поставить ОДИН sync плейлиста для добивания трека в m3u (без дублей)."""
-    if not safe:
-        return
-    if _pending_sync_exists(safe):
-        job.append(f"[info] обновление m3u '{safe}' уже запланировано — не дублирую")
-        return
-    enqueue_sync_for_m3u(safe)
-    job.append(f"[info] плейлист '{safe}' поставлен в очередь на обновление m3u")
 
 
 def _run_sync_for_m3u(job: Job, safe: str) -> None:
