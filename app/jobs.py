@@ -14,6 +14,7 @@
 """
 import os
 import queue
+import random
 import subprocess
 import sys
 import threading
@@ -350,18 +351,38 @@ def spotify_dl_args(spotify_url: str, safe: str = "", realtime: bool = False) ->
     ]
 
 
+def bulk_pause(is_cancelled=None, log=None) -> None:
+    """Idle-пауза между треками (поверх real-time, анти-бан). Случайная в диапазоне
+    ZOTIFY_BULK_WAIT_MIN..MAX. Прерывается отменой."""
+    hi = config.ZOTIFY_BULK_WAIT_MAX
+    if hi <= 0:
+        return
+    secs = random.uniform(min(config.ZOTIFY_BULK_WAIT_MIN, hi), hi)
+    if log:
+        log(f"[safe] пауза {int(secs)}с перед следующим треком")
+    end = time.time() + secs
+    while time.time() < end:
+        if is_cancelled and is_cancelled():
+            return
+        time.sleep(min(1.0, max(0.0, end - time.time())))
+
+
 def _run_zotify(job: Job, spotify_url: str, safe: str, force_realtime: bool = False) -> None:
     """Скачать трек напрямую со Spotify через librespot (320k с Premium) и
     положить в библиотеку. Real-time (скорость прослушивания, анти-бан): для
-    массовой/апгрейд-загрузки всегда, для одиночной — при включённом без. режиме."""
+    массовой/апгрейд-загрузки всегда, для одиночной — при включённом без. режиме.
+    Для массовой (force_realtime) при безопасном режиме — ещё пауза между треками."""
     from . import settings
     realtime = force_realtime or settings.get_safe_mode()
     job.append(f"=== Spotify (librespot): скачивание{' [real-time]' if realtime else ''} ===")
     rc, out = _run_process(job, spotify_dl_args(spotify_url, safe, realtime), cwd="/app")
     ok = rc == 0 and any(line.startswith("OK ") for line in out)
+    # пауза между треками: только для массовой закачки и при безопасном режиме
+    if force_realtime and settings.get_safe_mode() and not job.cancelled:
+        bulk_pause(lambda: job.cancelled, job.append)
     if not ok:
         job.status = "error"
-        job.append("[error] Zotify не дал результата — трек оставлен в списке ненайденных")
+        job.append("[error] Spotify не дал результата — трек оставлен в списке ненайденных")
         return
     if errors_parser.remove_track(safe, spotify_url):
         job.append("[ok] скачано со Spotify, трек убран из errors-файла")

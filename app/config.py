@@ -71,6 +71,12 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+# Idle-пауза (сек) МЕЖДУ треками поверх real-time (как Zotify bulk_wait_time).
+# Применяется к апгрейду (всегда) и к массовой «Скачать все» (если безопасный режим).
+ZOTIFY_BULK_WAIT_MIN = _int_env("ZOTIFY_BULK_WAIT_MIN", 5)
+ZOTIFY_BULK_WAIT_MAX = _int_env("ZOTIFY_BULK_WAIT_MAX", 15)
+
+
 # Апгрейд (Step 2): пропускать файлы, у которых битрейт уже >= порога (kbps).
 # По умолчанию 300, чтобы файлы ~320k не апгрейдились повторно, а старые (128-160k)
 # обновлялись. Согласовано с UPLOAD_BITRATE=320k.

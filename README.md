@@ -194,7 +194,8 @@ docker run --rm -p 4535:8000 -e APP_AUTH_TOKEN=dev \
 | `ZOTIFY_CREDENTIALS_FILE` | `/conf/zotify_credentials.json` | Путь к credentials.json Zotify (создаётся при первом логине). |
 | `ZOTIFY_USERNAME` / `ZOTIFY_PASSWORD` | — | Альтернатива credentials.json — логин/пароль Spotify (хуже, секрет в конфиге). |
 | `ZOTIFY_QUALITY` | `very_high` | `very_high`=320k (нужен Premium), `high`=160k, `normal`=96k, `auto`=макс. для аккаунта. |
-| `ZOTIFY_SAFE_MODE` | `true` | Безопасный режим: одиночные «Spotify 320k» качать в **real-time** (скорость прослушивания, анти-бан). Массовая закачка и апгрейд — всегда real-time. Тумблер в UI. |
+| `ZOTIFY_SAFE_MODE` | `true` | Безопасный режим: одиночные «Spotify 320k» качать в **real-time** (скорость прослушивания, анти-бан). Массовая закачка и апгрейд — всегда real-time; при включённом режиме у массовой ещё пауза между треками. Тумблер в UI. |
+| `ZOTIFY_BULK_WAIT_MIN` / `ZOTIFY_BULK_WAIT_MAX` | `5` / `15` | Idle-пауза (сек) между треками поверх real-time. Апгрейд — всегда; массовая «Скачать все» — при безопасном режиме. `MAX=0` — без паузы. |
 | `UPGRADE_MIN_BITRATE` | `300` | Апгрейд пропускает файлы, у которых битрейт уже ≥ этого (kbps), даже без метки. |
 | `UPGRADE_PER_DAY` | `0` | Лимит апгрейд-загрузок в сутки (анти-бан). `0` = без лимита (только паузы). |
 | `AUTOSYNC_INTERVAL_HOURS` | `24` | Период фонового автосинка (sync всех плейлистов). `0` — выключить планировщик. |

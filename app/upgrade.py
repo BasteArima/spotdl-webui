@@ -127,6 +127,10 @@ class _UpgradeController:
                     self._day_count += 1
                 else:
                     self.stats["failed"] += 1
+            # idle-пауза между треками (поверх real-time, анти-бан)
+            if not self._stop:
+                from . import jobs
+                jobs.bulk_pause(is_cancelled=lambda: self._stop)
         with self._lock:
             self.stats["state"] = "stopped" if self._stop else "idle"
             self.stats["current"] = ""

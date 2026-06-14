@@ -106,9 +106,11 @@ def main() -> None:
                 fh.write(chunk)
                 total += len(chunk)
                 if realtime:
+                    # как Zotify --download-real-time: спим ровно разницу, без
+                    # ограничения сверху — иначе скачивание обгоняло бы реалтайм
                     s = _pace_sleep(total, size, duration, started, time.time())
                     if s > 0:
-                        time.sleep(min(s, 5.0))
+                        time.sleep(s)
     finally:
         try:
             session.close()
