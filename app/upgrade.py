@@ -3,8 +3,8 @@
 Проходит по всем трекам библиотеки (из *.spotdl в /conf), для каждого ещё не
 апгрейженного скачивает 320k и перезаписывает файл по тому же пути. Метка «уже
 320k» хранится персистентно (/conf/.webui-upgraded.json), поэтому повторно треки
-НЕ качаются и прогресс переживает рестарт. Между загрузками — те же паузы
-безопасного режима (jobs.spotify_throttle), отдельным потоком, не блокируя UI.
+НЕ качаются и прогресс переживает рестарт. Загрузки идут в real-time (скорость
+прослушивания, анти-бан), отдельным потоком, не блокируя UI.
 """
 import glob
 import json
@@ -25,6 +25,8 @@ class _UpgradeController:
         self._lock = threading.Lock()
         self._thread = None
         self._stop = False
+        self._day = ""
+        self._day_count = 0
         self.upgraded = self._load()
         self.stats = {
             "state": "idle",          # idle | running | stopping | stopped
@@ -112,6 +114,8 @@ class _UpgradeController:
                 with self._lock:
                     self.stats["skipped"] += 1
                 continue
+            if not self._daily_gate():
+                break
             with self._lock:
                 self.stats["current"] = item["name"]
             ok = self._download(url, item["name"])
@@ -120,21 +124,48 @@ class _UpgradeController:
                     self.upgraded.add(url)
                     self._save()
                     self.stats["done"] += 1
+                    self._day_count += 1
                 else:
                     self.stats["failed"] += 1
         with self._lock:
             self.stats["state"] = "stopped" if self._stop else "idle"
             self.stats["current"] = ""
 
-    def _download(self, url: str, name: str) -> bool:
-        from . import jobs
-        jobs.spotify_throttle(is_cancelled=lambda: self._stop)
+    def _daily_gate(self) -> bool:
+        """Соблюсти лимит загрузок в сутки. Возвращает False, если остановлено."""
+        limit = config.UPGRADE_PER_DAY
+        if limit <= 0:
+            return True
+        today = time.strftime("%Y-%m-%d", time.gmtime())
+        if today != self._day:
+            self._day = today
+            self._day_count = 0
+        if self._day_count < limit:
+            return True
+        # лимит исчерпан — ждём наступления следующих суток (UTC)
+        with self._lock:
+            self.stats["state"] = "waiting"
+            self.stats["current"] = f"дневной лимит {limit} достигнут — пауза до след. суток"
+        while not self._stop and time.strftime("%Y-%m-%d", time.gmtime()) == today:
+            time.sleep(30)
         if self._stop:
             return False
+        self._day = time.strftime("%Y-%m-%d", time.gmtime())
+        self._day_count = 0
+        with self._lock:
+            self.stats["state"] = "running"
+        return True
+
+    def _download(self, url: str, name: str) -> bool:
+        if self._stop:
+            return False
+        # safe="" (m3u не трогаем при апгрейде), realtime="1" (скорость прослушивания)
         cmd = [sys.executable, "-m", "app.spotify_dl", url,
-               config.OUTPUT_TEMPLATE, config.AUDIO_FORMAT, config.UPLOAD_BITRATE]
+               config.OUTPUT_TEMPLATE, config.AUDIO_FORMAT, config.UPLOAD_BITRATE, "", "1"]
+        env = dict(os.environ, UPGRADE_MIN_BITRATE=str(config.UPGRADE_MIN_BITRATE))
         try:
-            r = subprocess.run(cmd, cwd="/app", capture_output=True, text=True, timeout=_DL_TIMEOUT)
+            r = subprocess.run(cmd, cwd="/app", capture_output=True, text=True,
+                               timeout=_DL_TIMEOUT, env=env)
         except subprocess.TimeoutExpired:
             print(f"[upgrade] TIMEOUT {name}", flush=True)
             return False

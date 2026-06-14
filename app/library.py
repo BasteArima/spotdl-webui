@@ -27,6 +27,38 @@ def fetch_song(spotify_url: str):
     return Song.from_url(spotify_url)
 
 
+def target_path(song, template: str, fmt: str):
+    """Абсолютный путь, куда ляжет трек (тот же, что использует place_file)."""
+    from spotdl.utils.formatter import create_file_name
+    out = create_file_name(song, template, fmt)
+    if not out.is_absolute():
+        out = Path("/") / out
+    return out
+
+
+def file_bitrate(path: str):
+    """Битрейт аудиофайла в kbps (или None). Через mutagen, иначе ffprobe."""
+    try:
+        from mutagen import File as MutagenFile
+        mf = MutagenFile(path)
+        if mf is not None and getattr(mf, "info", None) and getattr(mf.info, "bitrate", None):
+            return int(mf.info.bitrate / 1000)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import subprocess
+        r = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=bit_rate",
+             "-of", "default=nw=1:nk=1", path],
+            capture_output=True, text=True, timeout=20)
+        val = (r.stdout or "").strip()
+        if val.isdigit():
+            return int(int(val) / 1000)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def append_to_m3u(out_path: str, song, m3u_path: str, template: str, fmt: str, log=print) -> None:
     """Дописать один трек в m3u-плейлист — без полного spotdl sync.
     Строку #EXTINF берём из той же функции spotdl (формат совпадает), а путь —

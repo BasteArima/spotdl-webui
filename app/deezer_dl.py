@@ -29,12 +29,19 @@ def main() -> None:
     print(f"[meta] запрашиваю метаданные: {spotify_url}", flush=True)
     song = library.fetch_song(spotify_url)
     print(f"[meta] трек: {song.display_name}  ISRC={song.isrc}", flush=True)
-    if not song.isrc:
-        print("[error] у трека нет ISRC — сопоставление с Deezer невозможно", file=sys.stderr)
+
+    sng_id = None
+    if song.isrc:
+        print(f"[deezer] ищу по ISRC {song.isrc}", flush=True)
+        sng_id = deezer.resolve_isrc(song.isrc)
+    if sng_id is None:
+        print(f"[deezer] нет ISRC/не нашёлся — ищу по названию: {song.artist} - {song.name}", flush=True)
+        sng_id = deezer.search_track(song.artist, song.name)
+    if sng_id is None:
+        print("[error] трек не найден в каталоге Deezer", file=sys.stderr)
         sys.exit(5)
 
-    print(f"[deezer] ищу по ISRC {song.isrc}", flush=True)
-    tmp, dz_fmt = deezer.download_by_isrc(song.isrc, arl, config.UPLOADS_DIR)
+    tmp, dz_fmt = deezer.download_track(sng_id, arl, config.UPLOADS_DIR)
     print(f"[deezer] скачано ({dz_fmt}): {tmp}", flush=True)
 
     m3u = config.m3u_path(safe) if safe else None

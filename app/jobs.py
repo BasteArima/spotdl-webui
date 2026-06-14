@@ -14,7 +14,6 @@
 """
 import os
 import queue
-import random
 import subprocess
 import sys
 import threading
@@ -343,49 +342,22 @@ def _run_deezer(job: Job, spotify_url: str, safe: str) -> None:
         job.append("[ok] скачано с Deezer (в errors-файле не найдено — возможно, уже убрано)")
 
 
-def spotify_dl_args(spotify_url: str, safe: str = "") -> List[str]:
+def spotify_dl_args(spotify_url: str, safe: str = "", realtime: bool = False) -> List[str]:
     return [
         sys.executable, "-m", "app.spotify_dl",
-        spotify_url, config.OUTPUT_TEMPLATE, config.AUDIO_FORMAT, config.UPLOAD_BITRATE, safe,
+        spotify_url, config.OUTPUT_TEMPLATE, config.AUDIO_FORMAT, config.UPLOAD_BITRATE,
+        safe, "1" if realtime else "0",
     ]
 
 
-_last_spotify_dl = 0.0  # время старта последней Spotify-загрузки (для пауз)
-_throttle_lock = threading.Lock()
-
-
-def spotify_throttle(is_cancelled=None, log=None) -> None:
-    """Безопасный режим: выдержать паузу между Spotify-загрузками (анти-бан).
-    Пауза считается от старта прошлой загрузки → одиночный трек после простоя не
-    ждёт, а массовая закачка идёт размеренно. Общая для ручных и массовых задач,
-    поэтому суммарная скорость ограничена. is_cancelled/log — опциональны."""
-    from . import settings
-    global _last_spotify_dl
-    with _throttle_lock:
-        if not settings.get_safe_mode():
-            _last_spotify_dl = time.time()
-            return
-        gap = random.uniform(config.ZOTIFY_GAP_MIN, config.ZOTIFY_GAP_MAX)
-        end = _last_spotify_dl + gap
-        if end > time.time():
-            if log:
-                log(f"[safe] безопасный режим: пауза ~{int(end - time.time())}с перед загрузкой")
-            while time.time() < end:
-                if is_cancelled and is_cancelled():
-                    return
-                time.sleep(min(2.0, max(0.0, end - time.time())))
-        _last_spotify_dl = time.time()
-
-
-def _run_zotify(job: Job, spotify_url: str, safe: str) -> None:
+def _run_zotify(job: Job, spotify_url: str, safe: str, force_realtime: bool = False) -> None:
     """Скачать трек напрямую со Spotify через librespot (320k с Premium) и
-    положить в библиотеку. Лучшее качество и обход api.spotify.com (429)."""
-    spotify_throttle(lambda: job.cancelled, job.append)
-    if job.cancelled:
-        job.append("[cancelled] отменено во время паузы")
-        return
-    job.append("=== Spotify (librespot): скачивание ===")
-    rc, out = _run_process(job, spotify_dl_args(spotify_url, safe), cwd="/app")
+    положить в библиотеку. Real-time (скорость прослушивания, анти-бан): для
+    массовой/апгрейд-загрузки всегда, для одиночной — при включённом без. режиме."""
+    from . import settings
+    realtime = force_realtime or settings.get_safe_mode()
+    job.append(f"=== Spotify (librespot): скачивание{' [real-time]' if realtime else ''} ===")
+    rc, out = _run_process(job, spotify_dl_args(spotify_url, safe, realtime), cwd="/app")
     ok = rc == 0 and any(line.startswith("OK ") for line in out)
     if not ok:
         job.status = "error"
@@ -504,9 +476,9 @@ def enqueue_deezer(spotify_url: str, safe: str) -> Job:
     return _enqueue(job)
 
 
-def enqueue_zotify(spotify_url: str, safe: str) -> Job:
-    job = Job("zotify", f"Zotify 320k: {safe}",
-              lambda j: _run_zotify(j, spotify_url, safe))
+def enqueue_zotify(spotify_url: str, safe: str, force_realtime: bool = False) -> Job:
+    job = Job("zotify", f"Spotify 320k: {safe}",
+              lambda j: _run_zotify(j, spotify_url, safe, force_realtime))
     return _enqueue(job)
 
 

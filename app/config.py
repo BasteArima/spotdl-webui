@@ -22,9 +22,9 @@ OUTPUT_TEMPLATE = os.environ.get(
     "/music/spotify/{album-artist}/{album}/{track-number} - {title}.{output-ext}",
 )
 AUDIO_FORMAT = os.environ.get("AUDIO_FORMAT", "mp3")
-# Битрейт конвертации залитых вручную файлов. "auto"/"" — не форсировать (ffmpeg
-# по умолчанию). По умолчанию 256k, чтобы не сильно ронять качество исходника.
-UPLOAD_BITRATE = os.environ.get("UPLOAD_BITRATE", "256k")
+# Битрейт конвертации (заливка файлов, Deezer, Spotify-апгрейд). 320k — максимум,
+# что отдаёт Spotify (lossy Ogg → mp3). "auto"/"" — не форсировать (ffmpeg default).
+UPLOAD_BITRATE = os.environ.get("UPLOAD_BITRATE", "320k")
 
 # Авторизация. Без токена сервис стартовать не должен (см. main.py).
 APP_AUTH_TOKEN = os.environ.get("APP_AUTH_TOKEN", "")
@@ -58,22 +58,25 @@ ZOTIFY_USERNAME = os.environ.get("ZOTIFY_USERNAME", "")
 ZOTIFY_PASSWORD = os.environ.get("ZOTIFY_PASSWORD", "")
 # very_high=320k (нужен Premium), high=160k, normal=96k, auto=макс. для аккаунта
 ZOTIFY_QUALITY = os.environ.get("ZOTIFY_QUALITY", "very_high")
-# Безопасный режим: пауза между Spotify-загрузками (анти-бан). Включён по умолчанию.
+# Безопасный режим (анти-бан) = качать со СКОРОСТЬЮ ПРОСЛУШИВАНИЯ (real-time).
+# Массовая закачка и апгрейд — всегда real-time; одиночные «Spotify 320k» —
+# real-time только при включённой галочке. Тумблер есть в UI.
 ZOTIFY_SAFE_MODE = os.environ.get("ZOTIFY_SAFE_MODE", "true").strip().lower() in ("1", "true", "yes", "on")
 
 
-def _float_env(name: str, default: float) -> float:
+def _int_env(name: str, default: int) -> int:
     try:
-        return float(os.environ.get(name, default))
+        return int(os.environ.get(name, default) or default)
     except (TypeError, ValueError):
         return default
 
 
-ZOTIFY_GAP_MIN = _float_env("ZOTIFY_GAP_MIN", 20.0)   # мин. секунд между загрузками
-ZOTIFY_GAP_MAX = _float_env("ZOTIFY_GAP_MAX", 45.0)   # макс. секунд между загрузками
-# Качать со скоростью прослушивания (анти-бан, но медленно). По умолчанию выкл
-# для ручных одиночных треков; фоновый массовый апгрейд будет включать.
-ZOTIFY_REAL_TIME = os.environ.get("ZOTIFY_REAL_TIME", "").strip().lower() in ("1", "true", "yes", "on")
+# Апгрейд (Step 2): пропускать файлы, у которых битрейт уже >= порога (kbps).
+# По умолчанию 300, чтобы файлы ~320k не апгрейдились повторно, а старые (128-160k)
+# обновлялись. Согласовано с UPLOAD_BITRATE=320k.
+UPGRADE_MIN_BITRATE = _int_env("UPGRADE_MIN_BITRATE", 300)
+# Лимит апгрейд-загрузок в сутки (анти-бан). 0 = без лимита (real-time и так медленно).
+UPGRADE_PER_DAY = _int_env("UPGRADE_PER_DAY", 0)
 
 
 def zotify_configured() -> bool:

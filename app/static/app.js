@@ -45,7 +45,7 @@ async function loadSettings() {
 document.getElementById("safe-mode-toggle").addEventListener("change", async (e) => {
   try {
     const s = await api("POST", "/api/settings", { safe_mode: e.target.checked });
-    toast(s.safe_mode ? "Безопасный режим включён (паузы между загрузками)" : "Безопасный режим выключен");
+    toast(s.safe_mode ? "Безопасный режим: одиночные Spotify-загрузки в real-time" : "Безопасный режим выкл: одиночные Spotify-загрузки на полной скорости");
   } catch (err) {
     toast("Ошибка: " + err.message);
     e.target.checked = !e.target.checked;  // откатить визуально
@@ -264,12 +264,13 @@ async function enqueueDownloads(rows) {
   } catch (e) { toast("Ошибка: " + e.message); }
 }
 
-// Попытка скачать трек из альтернативного источника (Deezer/Zotify).
-async function trySource(row, endpoint, label) {
+// Попытка скачать трек из альтернативного источника (Deezer/Spotify).
+async function trySource(row, endpoint, label, extra) {
   row.statusEl.className = "rowstatus queued";
   row.statusEl.textContent = ` ${label} в очереди`;
   try {
-    const data = await api("POST", endpoint, { spotify_url: row.spotify_url, safe: row.safe });
+    const body = Object.assign({ spotify_url: row.spotify_url, safe: row.safe }, extra || {});
+    const data = await api("POST", endpoint, body);
     PENDING.set(data.job.id, row);
     toast(`Попытка ${label} в очереди`);
     showTasks(); pollTasks();
@@ -324,8 +325,11 @@ function bulkDownload(rows) {
   const endpoint = mode === "deezer" ? "/api/deezer" : "/api/zotify";
   const label = mode === "deezer" ? "Deezer" : "Spotify 320k";
   if (!rows.length) { toast("Нет треков"); return; }
-  if (!confirm(`Поставить в очередь ${rows.length} трек(ов) через ${label}?`)) return;
-  rows.forEach(r => trySource(r, endpoint, label));
+  const note = mode === "spotify" ? " (real-time, медленно — безопасно от бана)" : "";
+  if (!confirm(`Поставить в очередь ${rows.length} трек(ов) через ${label}?${note}`)) return;
+  // массовая Spotify-закачка → всегда real-time (bulk:true)
+  const extra = mode === "spotify" ? { bulk: true } : {};
+  rows.forEach(r => trySource(r, endpoint, label, extra));
 }
 
 // ------------------------------------------------------------------ плейлисты
@@ -421,7 +425,7 @@ async function loadUpgrade() {
   try { s = await api("GET", "/api/upgrade/status"); }
   catch (e) { document.getElementById("upg-progress").textContent = "Ошибка: " + e.message; return; }
   renderUpgrade(s);
-  if ((s.state === "running" || s.state === "stopping") &&
+  if (["running", "stopping", "waiting"].includes(s.state) &&
       document.getElementById("view-upgrade").classList.contains("active")) {
     UPG_TIMER = setTimeout(loadUpgrade, 2000);
   }
@@ -430,7 +434,7 @@ function renderUpgrade(s) {
   const cont = document.getElementById("upg-progress");
   const processed = s.done + s.failed + s.skipped;
   const pct = s.total ? Math.round(processed / s.total * 100) : 0;
-  const stateLabel = { idle: "ожидание", running: "идёт", stopping: "останавливается…", stopped: "остановлен" }[s.state] || s.state;
+  const stateLabel = { idle: "ожидание", running: "идёт", stopping: "останавливается…", stopped: "остановлен", waiting: "пауза (дневной лимит)" }[s.state] || s.state;
   cont.innerHTML = "";
   cont.appendChild(el("div", { class: "row", style: "gap:18px;flex-wrap:wrap;margin-bottom:8px" }, [
     el("span", {}, [el("span", { class: "muted" }, ["Статус: "]), el("strong", {}, [stateLabel])]),
@@ -540,42 +544,83 @@ async function pollTasks() {
   TASK_POLL_TIMER = setTimeout(pollTasks, delay);
 }
 
+// Инкрементальный рендер списка задач: НЕ пересоздаём DOM каждый поллинг, иначе
+// сбрасывается выделение текста в открытом логе. Обновляем строки на месте.
+const TASK_NODES = new Map();  // id -> {row, statusEl, actBtn, job}
+
+function _statusText(j) {
+  return (j.status === "queued" && j.queue_pos) ? `в очереди #${j.queue_pos}` : j.status;
+}
+function _makeTaskNode(j) {
+  const statusEl = el("span", { class: "status " + j.status }, [_statusText(j)]);
+  const copyBtn = el("button", { class: "tact copy", title: "Копировать весь лог" }, ["📋"]);
+  const actBtn = el("button", { class: "tact" }, [""]);
+  const row = el("div", { class: "taskrow" }, [
+    el("span", { class: "tname" }, [j.title]),
+    statusEl, copyBtn, actBtn,
+  ]);
+  const node = { row, statusEl, actBtn, job: j };
+  copyBtn.addEventListener("click", (ev) => { ev.stopPropagation(); copyJobLog(node.job.id); });
+  actBtn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    const st = node.job.status;
+    if (st === "queued" || st === "running") cancelJob(node.job.id); else removeJob(node.job.id);
+  });
+  row.addEventListener("click", () => selectTask(j.id));
+  return node;
+}
+function _updateTaskNode(node, j) {
+  node.job = j;
+  node.statusEl.className = "status " + j.status;
+  node.statusEl.textContent = _statusText(j);
+  const active = j.status === "queued" || j.status === "running";
+  node.actBtn.className = "tact " + (active ? "cancel" : "remove");
+  node.actBtn.textContent = active ? "✕" : "🗑";
+  node.actBtn.title = active ? "Отменить" : "Убрать из списка";
+  node.row.classList.toggle("sel", SEL_JOB === j.id);
+}
+
 function renderTaskList(jobs) {
   const panel = document.getElementById("taskspanel");
   const list = document.getElementById("taskslist");
-  if (LOG_EL.parentNode) LOG_EL.remove();   // сохранить элемент перед очисткой списка
-  list.innerHTML = "";
 
-  // панель видна только когда есть задачи; пусто — прячем (размер «как свёрнуто»)
-  if (!jobs.length) { panel.classList.remove("visible"); document.getElementById("tasks-summary").textContent = ""; return; }
+  if (!jobs.length) {
+    panel.classList.remove("visible");
+    document.getElementById("tasks-summary").textContent = "";
+    for (const [, n] of TASK_NODES) n.row.remove();
+    TASK_NODES.clear();
+    return;
+  }
   panel.classList.add("visible");
 
   const recent = jobs.slice(0, 12);
-  let selRow = null;
+  const want = new Set(recent.map(j => j.id));
+  // удалить пропавшие
+  for (const [id, n] of [...TASK_NODES]) {
+    if (!want.has(id)) {
+      n.row.remove(); TASK_NODES.delete(id);
+      if (SEL_JOB === id) hideLog();
+    }
+  }
+  // upsert (newest-first: новые добавляем в начало, существующие не двигаем)
   recent.forEach(j => {
-    const isActive = j.status === "queued" || j.status === "running";
-    const statusText = (j.status === "queued" && j.queue_pos) ? `в очереди #${j.queue_pos}` : j.status;
-    const actBtn = isActive
-      ? el("button", { class: "tact cancel", title: "Отменить" }, ["✕"])
-      : el("button", { class: "tact remove", title: "Убрать из списка" }, ["🗑"]);
-    actBtn.addEventListener("click", (ev) => { ev.stopPropagation(); isActive ? cancelJob(j.id) : removeJob(j.id); });
-    const tr = el("div", { class: "taskrow" + (SEL_JOB === j.id ? " sel" : "") }, [
-      el("span", { class: "tname" }, [j.title]),
-      el("span", { class: "status " + j.status }, [statusText]),
-      actBtn,
-    ]);
-    tr.addEventListener("click", () => selectTask(j.id));
-    list.appendChild(tr);
-    if (SEL_JOB === j.id) selRow = tr;
+    let node = TASK_NODES.get(j.id);
+    if (!node) {
+      node = _makeTaskNode(j);
+      TASK_NODES.set(j.id, node);
+      list.insertBefore(node.row, list.firstChild);
+    }
+    _updateTaskNode(node, j);
   });
 
-  // инлайн-лог: вставляем прямо ПОД выбранной строкой
-  if (selRow && !panel.classList.contains("collapsed")) {
-    selRow.insertAdjacentElement("afterend", LOG_EL);
+  // инлайн-лог под выбранной строкой — двигаем ТОЛЬКО если он не на месте
+  // (иначе перенос узла сбрасывал бы выделение/прокрутку при каждом поллинге)
+  const sel = SEL_JOB ? TASK_NODES.get(SEL_JOB) : null;
+  if (sel && !panel.classList.contains("collapsed")) {
+    if (sel.row.nextSibling !== LOG_EL) sel.row.insertAdjacentElement("afterend", LOG_EL);
     LOG_EL.style.display = "block";
-  } else {
-    if (SEL_JOB && !recent.some(j => j.id === SEL_JOB)) SEL_JOB = null;  // выбранная пропала
-    LOG_EL.style.display = "none";
+  } else if (LOG_EL.parentNode) {
+    LOG_EL.remove(); LOG_EL.style.display = "none";
   }
 
   const active = jobs.filter(j => j.status === "queued" || j.status === "running").length;
@@ -597,11 +642,37 @@ async function refreshSelectedLog() {
     const job = data.job;
     if (job.log && job.log.length) {
       const atBottom = LOG_EL.scrollHeight - LOG_EL.scrollTop - LOG_EL.clientHeight < 40;
-      LOG_EL.textContent += job.log.join("\n") + "\n";
+      // appendChild новой ноды НЕ трогает существующий текст → выделение не сбрасывается
+      LOG_EL.appendChild(document.createTextNode(job.log.join("\n") + "\n"));
       SEL_LOG_OFFSET = job.log_offset + job.log.length;
       if (atBottom) LOG_EL.scrollTop = LOG_EL.scrollHeight;
     }
   } catch (e) { /* игнор */ }
+}
+
+// Копировать весь лог задачи (с фолбэком для http — без navigator.clipboard).
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text); return true;
+    }
+  } catch (e) { /* фолбэк ниже */ }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) { return false; }
+}
+async function copyJobLog(jobId) {
+  try {
+    const data = await api("GET", "/api/jobs/" + jobId + "?since=0");
+    const text = (data.job.log || []).join("\n");
+    const ok = await copyText(text);
+    toast(ok ? "Лог скопирован" : "Не удалось скопировать");
+  } catch (e) { toast("Ошибка: " + e.message); }
 }
 
 // ------------------------------------------------------------------ вход

@@ -45,6 +45,30 @@ def resolve_isrc(isrc: str) -> Optional[int]:
     return None
 
 
+def search_track(artist: str, title: str) -> Optional[int]:
+    """Найти трек на Deezer по исполнителю+названию (фолбэк, когда нет ISRC).
+    Возвращает Deezer track id или None."""
+    artist = (artist or "").strip()
+    title = (title or "").strip()
+    if not title:
+        return None
+    queries = []
+    if artist:
+        queries.append(f'artist:"{artist}" track:"{title}"')
+        queries.append(f"{artist} {title}")
+    else:
+        queries.append(title)
+    for q in queries:
+        try:
+            r = requests.get(f"{_PUBLIC}/search", params={"q": q, "limit": 5}, timeout=15)
+            data = r.json().get("data") or []
+        except Exception:  # noqa: BLE001
+            continue
+        if data:
+            return int(data[0]["id"])
+    return None
+
+
 def _blowfish_key(sng_id) -> bytes:
     h = hashlib.md5(str(sng_id).encode()).hexdigest().encode()  # 32 hex-байта
     return bytes(h[i] ^ h[i + 16] ^ _SECRET[i] for i in range(16))

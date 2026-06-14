@@ -14,15 +14,29 @@ services:
       # Фоновый автосинк (замена старого контейнера-автосинка). 0 = выключить.
       - AUTOSYNC_INTERVAL_HOURS=24
       - AUTOSYNC_ON_START=false
-      # Deezer-фолбэк (для треков, которых нет на YouTube). ARL — секрет уровня
-      # пароля; лучше класть файлом в /conf/deezer_arl.txt, а не сюда. Либо:
+      #
+      # --- ОПЦИОНАЛЬНО (всё ниже можно не задавать — есть значения по умолчанию) ---
+      #
+      # Deezer-фолбэк (треки, которых нет на YouTube). ARL — секрет уровня пароля;
+      # лучше класть файлом в /conf/deezer_arl.txt, а не сюда. Либо:
       # - DEEZER_ARL=твой_arl_токен
-      # Zotify (реальное аудио со Spotify, 320k с Premium). Лучше положить
-      # /conf/zotify_credentials.json. Параметры по желанию:
-      # - ZOTIFY_QUALITY=very_high
-      # - ZOTIFY_SAFE_MODE=true        # паузы между Spotify-загрузками (анти-бан)
-      # - ZOTIFY_GAP_MIN=20            # мин. секунд между загрузками
-      # - ZOTIFY_GAP_MAX=45            # макс. секунд между загрузками
+      #
+      # Spotify напрямую (librespot, 320k с Premium): кнопка «Spotify 320k» и
+      # апгрейд качества. Креды — файлом /conf/zotify_credentials.json
+      # (см. README, раздел «Spotify напрямую»). Параметры:
+      # - ZOTIFY_QUALITY=very_high     # very_high=320k, high=160k, normal=96k
+      #
+      # Безопасный режим (анти-бан) = качать в REAL-TIME (скорость прослушивания).
+      # Массовая закачка и апгрейд — всегда real-time; одиночные — при вкл. галочке.
+      # По умолчанию включён; тумблер есть в UI.
+      # - ZOTIFY_SAFE_MODE=true
+      #
+      # Битрейт mp3 (заливка/Deezer/апгрейд). 320k — максимум Spotify.
+      # - UPLOAD_BITRATE=320k
+      #
+      # Апгрейд качества до 320k (вкладка «Апгрейд 320k»):
+      # - UPGRADE_MIN_BITRATE=300      # пропускать файлы, что уже >= этого (kbps)
+      # - UPGRADE_PER_DAY=0            # лимит загрузок в сутки (0 = без лимита)
     volumes:
       - "/srv/dev-disk-by-uuid-6c40d758-c9b4-46dc-a0b1-84826fd43804/data/spotdl:/conf"
       - "/srv/dev-disk-by-uuid-be7624de-4d24-4133-b0b5-8e3cd8548788/storage/music:/music"

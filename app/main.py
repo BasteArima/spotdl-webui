@@ -186,16 +186,22 @@ def api_deezer(body: DeezerIn):
     return {"job": job.to_dict()}
 
 
+class ZotifyIn(BaseModel):
+    spotify_url: str
+    safe: str
+    bulk: bool = False   # массовая закачка → всегда real-time
+
+
 @app.post("/api/zotify", dependencies=[Depends(require_auth)])
-def api_zotify(body: DeezerIn):
-    """Скачать трек реально со Spotify через Zotify (320k с Premium)."""
+def api_zotify(body: ZotifyIn):
+    """Скачать трек напрямую со Spotify (librespot, 320k с Premium)."""
     sp = body.spotify_url.strip()
     safe = body.safe.strip()
     if not _SPOTIFY_TRACK_RE.search(sp):
         raise HTTPException(status_code=400, detail="Нужна ссылка на трек Spotify (open.spotify.com/track/…)")
     if not config.zotify_configured():
-        raise HTTPException(status_code=400, detail="Zotify не настроен (нет credentials.json или логина/пароля Spotify)")
-    job = jobs.enqueue_zotify(sp, safe)
+        raise HTTPException(status_code=400, detail="Spotify не настроен (нет credentials.json)")
+    job = jobs.enqueue_zotify(sp, safe, force_realtime=body.bulk)
     return {"job": job.to_dict()}
 
 

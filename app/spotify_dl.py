@@ -15,6 +15,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 
 
 def _track_id_from_url(url: str) -> str:
@@ -23,12 +24,23 @@ def _track_id_from_url(url: str) -> str:
     return tail.split("?")[0].split("/")[0]
 
 
+def _pace_sleep(written: int, size, duration, started_at: float, now: float) -> float:
+    """Сколько секунд подождать, чтобы скачивание шло со скоростью прослушивания.
+    Цель: скачать `size` байт примерно за `duration` секунд (real-time, анти-бан)."""
+    if not size or not duration:
+        return 0.0
+    expected = (written / size) * duration
+    return max(0.0, expected - (now - started_at))
+
+
 def main() -> None:
     if len(sys.argv) < 5:
-        print("usage: spotify_dl <spotify_url> <template> <format> <bitrate> [safe]", file=sys.stderr)
+        print("usage: spotify_dl <spotify_url> <template> <format> <bitrate> [safe] [realtime]",
+              file=sys.stderr)
         sys.exit(2)
     spotify_url, template, fmt, bitrate = sys.argv[1:5]
     safe = sys.argv[5] if len(sys.argv) > 5 else ""
+    realtime = len(sys.argv) > 6 and sys.argv[6] == "1"
 
     from app import config, library
 
@@ -37,6 +49,24 @@ def main() -> None:
         print(f"[error] нет {creds} — сгенерируй: python -m app.gen_zotify_creds {creds}",
               file=sys.stderr)
         sys.exit(4)
+
+    # Метаданные сначала: нужны для пути, тегов и проверки «уже хорошего качества».
+    library.init_spotify()
+    song = library.fetch_song(spotify_url)
+
+    # Апгрейд: если файл уже есть и его битрейт >= порога — не перекачиваем.
+    min_br = 0
+    try:
+        min_br = int(os.environ.get("UPGRADE_MIN_BITRATE", "0") or "0")
+    except ValueError:
+        min_br = 0
+    if min_br > 0:
+        out_existing = library.target_path(song, template, fmt)
+        if os.path.exists(out_existing):
+            br = library.file_bitrate(str(out_existing))
+            if br and br >= min_br:
+                print(f"OK SKIP {out_existing} (уже {br}k)", flush=True)
+                return
 
     from librespot.audio.decoders import AudioQuality, VorbisOnlyAudioQuality
     from librespot.core import Session
@@ -49,7 +79,8 @@ def main() -> None:
     conf = Session.Configuration.Builder().set_store_credentials(False).build()
     session = Session.Builder(conf).stored_file(creds).create()
 
-    print(f"[librespot] {uri}: запрашиваю аудио (quality=VERY_HIGH)", flush=True)
+    mode = "real-time" if realtime else "обычная"
+    print(f"[librespot] {uri}: запрашиваю аудио (quality=VERY_HIGH, {mode} скорость)", flush=True)
     track_id = TrackId.from_uri(uri)
     stream = session.content_feeder().load(
         track_id, VorbisOnlyAudioQuality(AudioQuality.VERY_HIGH), False, None)
@@ -58,8 +89,15 @@ def main() -> None:
     tmpdir = tempfile.mkdtemp(dir=config.UPLOADS_DIR, prefix="lr_")
     ogg = os.path.join(tmpdir, "track.ogg")
     total = 0
+    duration = float(getattr(song, "duration", 0) or 0)  # секунды
     try:
         inp = stream.input_stream.stream()
+        size = None
+        try:
+            size = inp.size()
+        except Exception:  # noqa: BLE001
+            size = None
+        started = time.time()
         with open(ogg, "wb") as fh:
             while True:
                 chunk = inp.read(64 * 1024)
@@ -67,6 +105,10 @@ def main() -> None:
                     break
                 fh.write(chunk)
                 total += len(chunk)
+                if realtime:
+                    s = _pace_sleep(total, size, duration, started, time.time())
+                    if s > 0:
+                        time.sleep(min(s, 5.0))
     finally:
         try:
             session.close()
@@ -79,8 +121,6 @@ def main() -> None:
         print("[error] поток пуст/слишком мал — трек недоступен?", file=sys.stderr)
         sys.exit(5)
 
-    library.init_spotify()
-    song = library.fetch_song(spotify_url)
     m3u = config.m3u_path(safe) if safe else None
     try:
         out = library.place_file(ogg, song, template, fmt, bitrate,
