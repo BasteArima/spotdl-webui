@@ -457,7 +457,9 @@ app/
   place_localfile.py  заливка локального файла (исп. library)
   deezer.py        скачивание+расшифровка трека с Deezer (requests+pycryptodome)
   deezer_dl.py     Deezer-фолбэк по ISRC (исп. deezer + library)
-  spotify_dl.py    скачивание напрямую со Spotify (librespot, 320k, без api.spotify.com)
+  librespot_dl.py  общее ядро скачивания трека через librespot (сессия снаружи)
+  spotify_dl.py    одноразовое скачивание одного трека (ручные кнопки)
+  spotify_worker.py  долгоживущий воркер: ОДНА авторизация librespot на весь апгрейд
   gen_zotify_creds.py  одноразовая генерация credentials.json через OAuth (FB-вход)
   settings.py      рантайм-настройки (безопасный режим) в /conf, тумблер в UI
   upgrade.py       Step 2: фоновый массовый апгрейд библиотеки до 320k с метками

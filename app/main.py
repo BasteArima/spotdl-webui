@@ -80,10 +80,6 @@ class DownloadBatchIn(BaseModel):
     items: list[DownloadItem]
 
 
-class RetryIn(BaseModel):
-    safe: str
-
-
 # ------------------------------------------------------------------ статика / здоровье
 @app.get("/healthz")
 def healthz():
@@ -232,15 +228,6 @@ async def api_upload(
     # sync на обновление m3u ставит сама задача — только при успехе, без дублей
     job = jobs.enqueue_upload(tmp_path, spotify_url, safe, file.filename)
     return {"job": job.to_dict(), "filename": file.filename}
-
-
-@app.post("/api/retry", dependencies=[Depends(require_auth)])
-def api_retry(body: RetryIn):
-    safe = body.safe.strip()
-    if not safe:
-        raise HTTPException(status_code=400, detail="Не указан плейлист")
-    job = jobs.enqueue_retry(safe)
-    return {"job": job.to_dict()}
 
 
 @app.get("/api/jobs", dependencies=[Depends(require_auth)])

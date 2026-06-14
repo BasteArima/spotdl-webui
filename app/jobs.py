@@ -56,7 +56,6 @@ _LANE_BY_KIND = {
     "zotify": LANE_INTERACTIVE,      # реальное аудио со Spotify (320k)
     "upload": LANE_INTERACTIVE,      # заливка локального файла + мета со Spotify
     "sync": LANE_INTERACTIVE,        # ручной sync одного плейлиста / обновление m3u
-    "retry": LANE_INTERACTIVE,
     "sync-all": LANE_BACKGROUND,     # «Синхронизировать всё» (тяжёлая)
     "autosync": LANE_BACKGROUND,     # плановый автосинк
 }
@@ -77,7 +76,6 @@ class Job:
         self.finished: Optional[float] = None
         self.returncode: Optional[int] = None
         self.cancelled = False
-        self.target: Optional[str] = None  # safe плейлиста (для дедупа sync-задач)
         self._lock = threading.Lock()
 
     def append(self, text: str) -> None:
@@ -246,18 +244,6 @@ def download_match_args(youtube_url: str, spotify_url: str) -> List[str]:
     return ["download", query] + _common_output_args()
 
 
-def retry_errors_args(spotify_urls: List[str]) -> List[str]:
-    """Расширенный авто-повтор: пробуем несколько источников аудио для треков.
-
-    ВАЖНО: spotdl распознаёт как файл-список только `*.spotdl`. Путь к errors/*.txt
-    он бы воспринял как поисковый запрос, поэтому передаём СПИСОК Spotify-URL
-    отдельными аргументами (каждый open.spotify.com/track/... обрабатывается)."""
-    return [
-        "download", *spotify_urls,
-        "--audio", "youtube-music", "youtube", "soundcloud",
-    ] + _common_output_args()
-
-
 # ------------------------------------------------------------------ раннеры задач
 def _reset_errors_file(safe: str) -> None:
     """Удаляет errors-файл плейлиста перед sync. spotdl пишет --save-errors в
@@ -343,11 +329,14 @@ def _run_deezer(job: Job, spotify_url: str, safe: str) -> None:
         job.append("[ok] скачано с Deezer (в errors-файле не найдено — возможно, уже убрано)")
 
 
-def spotify_dl_args(spotify_url: str, safe: str = "", realtime: bool = False) -> List[str]:
+def spotify_dl_args(spotify_url: str, safe: str = "", realtime: bool = False,
+                    min_bitrate: int = 0) -> List[str]:
+    # min_bitrate>0 (пропуск уже-хороших файлов) задаёт ТОЛЬКО апгрейд; для ручной
+    # кнопки он 0 → она всегда качает заново.
     return [
         sys.executable, "-m", "app.spotify_dl",
         spotify_url, config.OUTPUT_TEMPLATE, config.AUDIO_FORMAT, config.UPLOAD_BITRATE,
-        safe, "1" if realtime else "0",
+        safe, "1" if realtime else "0", str(int(min_bitrate)),
     ]
 
 
@@ -377,9 +366,6 @@ def _run_zotify(job: Job, spotify_url: str, safe: str, force_realtime: bool = Fa
     job.append(f"=== Spotify (librespot): скачивание{' [real-time]' if realtime else ''} ===")
     rc, out = _run_process(job, spotify_dl_args(spotify_url, safe, realtime), cwd="/app")
     ok = rc == 0 and any(line.startswith("OK ") for line in out)
-    # пауза между треками: только для массовой закачки и при безопасном режиме
-    if force_realtime and settings.get_safe_mode() and not job.cancelled:
-        bulk_pause(lambda: job.cancelled, job.append)
     if not ok:
         job.status = "error"
         job.append("[error] Spotify не дал результата — трек оставлен в списке ненайденных")
@@ -388,6 +374,10 @@ def _run_zotify(job: Job, spotify_url: str, safe: str, force_realtime: bool = Fa
         job.append("[ok] скачано со Spotify, трек убран из errors-файла")
     else:
         job.append("[ok] скачано со Spotify (в errors не найдено — возможно, уже убрано)")
+    # пауза между треками: только для массовой закачки и только при безопасном режиме
+    # (после УСПЕХА — чтобы пачка падающих треков не простаивала впустую)
+    if force_realtime and settings.get_safe_mode() and not job.cancelled:
+        bulk_pause(lambda: job.cancelled, job.append)
 
 
 def place_localfile_args(temp_path: str, spotify_url: str, safe: str = "") -> List[str]:
@@ -430,24 +420,6 @@ def _run_sync_for_m3u(job: Job, safe: str) -> None:
         _sync_locked(job, pl)
     except TimeoutError as e:
         job.append(f"[warn] не удалось взять лок для sync: {e}")
-
-
-def _run_retry(job: Job, safe: str) -> None:
-    job.append(f"=== расширенный повторный поиск по errors/{safe}.txt ===")
-    data = errors_parser.parse_errors_file(config.errors_path(safe))
-    urls = [t["spotify_url"] for t in data.get("tracks", []) if t.get("spotify_url")]
-    if not urls:
-        job.append("[info] в errors-файле нет треков для повтора")
-        return
-    job.append(f"[info] пробуем {len(urls)} трек(ов) через youtube-music / youtube / soundcloud")
-    pl = playlists.find_by_safe(safe)
-    if pl is not None:
-        with PlaylistLock(pl.id, job):
-            run_spotdl(job, retry_errors_args(urls))
-        job.append(f"=== sync '{pl.name}' для обновления m3u ===")
-        _sync_locked(job, pl)
-    else:
-        run_spotdl(job, retry_errors_args(urls))
 
 
 # ------------------------------------------------------------------ публичное API
@@ -512,7 +484,6 @@ def enqueue_upload(temp_path: str, spotify_url: str, safe: str, orig_name: str) 
 def enqueue_sync_for_m3u(safe: str) -> Job:
     job = Job("sync", f"Обновление m3u: {safe}",
               lambda j: _run_sync_for_m3u(j, safe))
-    job.target = safe
     return _enqueue(job)
 
 
@@ -541,12 +512,6 @@ def enqueue_download_batch(items: List[dict]) -> dict:
         job = enqueue_sync_for_m3u(safe)
         syncs.append({"id": job.id, "safe": safe})
     return {"downloads": downloads, "syncs": syncs}
-
-
-def enqueue_retry(safe: str) -> Job:
-    job = Job("retry", f"Повторный поиск: {safe}",
-              lambda j: _run_retry(j, safe))
-    return _enqueue(job)
 
 
 def get_job(job_id: str) -> Optional[Job]:

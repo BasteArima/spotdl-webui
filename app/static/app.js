@@ -188,7 +188,7 @@ function renderErrors() {
       ROWS.push(row); groupRows.push(row);
       dlBtn.addEventListener("click", () => enqueueDownloads([row]));
       dzBtn.addEventListener("click", () => tryDeezer(row));
-      ztBtn.addEventListener("click", () => trySource(row, "/api/zotify", "Spotify"));
+      ztBtn.addEventListener("click", () => trySource(row, "/api/zotify", "Spotify 320k"));
       fileBtn.addEventListener("click", () => fileInput.click());
       fileInput.addEventListener("change", () => {
         if (fileInput.files && fileInput.files[0]) uploadFile(row, fileInput.files[0]);
@@ -265,19 +265,19 @@ async function enqueueDownloads(rows) {
 }
 
 // Попытка скачать трек из альтернативного источника (Deezer/Spotify).
-async function trySource(row, endpoint, label, extra) {
+// quiet=true (для массовой) подавляет тост/опрос на каждую строку — их делают раз.
+async function trySource(row, endpoint, label, extra, quiet) {
   row.statusEl.className = "rowstatus queued";
   row.statusEl.textContent = ` ${label} в очереди`;
   try {
     const body = Object.assign({ spotify_url: row.spotify_url, safe: row.safe }, extra || {});
     const data = await api("POST", endpoint, body);
     PENDING.set(data.job.id, row);
-    toast(`Попытка ${label} в очереди`);
-    showTasks(); pollTasks();
+    if (!quiet) { toast(`Попытка ${label} в очереди`); showTasks(); pollTasks(); }
   } catch (e) {
     row.statusEl.className = "rowstatus error";
     row.statusEl.textContent = " " + e.message;
-    toast(`${label}: ${e.message}`);
+    if (!quiet) toast(`${label}: ${e.message}`);
   }
 }
 function tryDeezer(row) { return trySource(row, "/api/deezer", "Deezer"); }
@@ -329,7 +329,9 @@ function bulkDownload(rows) {
   if (!confirm(`Поставить в очередь ${rows.length} трек(ов) через ${label}?${note}`)) return;
   // массовая Spotify-закачка → всегда real-time (bulk:true)
   const extra = mode === "spotify" ? { bulk: true } : {};
-  rows.forEach(r => trySource(r, endpoint, label, extra));
+  rows.forEach(r => trySource(r, endpoint, label, extra, true));  // quiet — один тост ниже
+  toast(`В очередь: ${rows.length} трек(ов) через ${label}`);
+  showTasks(); pollTasks();
 }
 
 // ------------------------------------------------------------------ плейлисты
@@ -602,8 +604,11 @@ function renderTaskList(jobs) {
       if (SEL_JOB === id) hideLog();
     }
   }
-  // upsert (newest-first: новые добавляем в начало, существующие не двигаем)
-  recent.forEach(j => {
+  // upsert: существующие узлы НЕ двигаем (иначе сбрасывалось бы выделение/лог),
+  // только обновляем на месте. Новые узлы вставляем prepend'ом, перебирая recent
+  // в ОБРАТНОМ порядке → итог сверху вниз = newest-first (и на старте, и при добавлении).
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const j = recent[i];
     let node = TASK_NODES.get(j.id);
     if (!node) {
       node = _makeTaskNode(j);
@@ -611,7 +616,7 @@ function renderTaskList(jobs) {
       list.insertBefore(node.row, list.firstChild);
     }
     _updateTaskNode(node, j);
-  });
+  }
 
   // инлайн-лог под выбранной строкой — двигаем ТОЛЬКО если он не на месте
   // (иначе перенос узла сбрасывал бы выделение/прокрутку при каждом поллинге)

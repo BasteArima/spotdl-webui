@@ -150,10 +150,3 @@ def download_track(sng_id: int, arl: str, dest_dir: str) -> Tuple[str, str]:
         resp.raise_for_status()
         _decrypt_to(resp, sng_id, dest)
     return dest, fmt
-
-
-def download_by_isrc(isrc: str, arl: str, dest_dir: str) -> Tuple[str, str]:
-    sng_id = resolve_isrc(isrc)
-    if sng_id is None:
-        raise DeezerError(f"Трек с ISRC {isrc} не найден в каталоге Deezer")
-    return download_track(sng_id, arl, dest_dir)

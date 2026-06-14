@@ -9,6 +9,7 @@
 import glob
 import json
 import os
+import queue
 import subprocess
 import sys
 import threading
@@ -17,7 +18,8 @@ import time
 from . import config
 
 _STATE_FILE = os.path.join(config.CONF_DIR, ".webui-upgraded.json")
-_DL_TIMEOUT = int(os.environ.get("ZOTIFY_TIMEOUT", "900"))
+# Запас по времени на ОДИН трек (real-time ~ длительность + конвертация/мета).
+_DL_TIMEOUT = int(os.environ.get("UPGRADE_TRACK_TIMEOUT", "1200"))
 
 
 class _UpgradeController:
@@ -27,6 +29,9 @@ class _UpgradeController:
         self._stop = False
         self._day = ""
         self._day_count = 0
+        # Долгоживущий воркер: одна авторизация librespot на весь сеанс
+        self._worker = None
+        self._result_q = None
         self.upgraded = self._load()
         self.stats = {
             "state": "idle",          # idle | running | stopping | stopped
@@ -97,8 +102,9 @@ class _UpgradeController:
     def stop(self) -> None:
         self._stop = True
         with self._lock:
-            if self.stats["state"] == "running":
+            if self.stats["state"] in ("running", "waiting"):
                 self.stats["state"] = "stopping"
+        self._kill_worker()
 
     # ---- основной цикл ----
     def _run(self) -> None:
@@ -131,6 +137,7 @@ class _UpgradeController:
             if not self._stop:
                 from . import jobs
                 jobs.bulk_pause(is_cancelled=lambda: self._stop)
+        self._kill_worker()
         with self._lock:
             self.stats["state"] = "stopped" if self._stop else "idle"
             self.stats["current"] = ""
@@ -160,22 +167,78 @@ class _UpgradeController:
             self.stats["state"] = "running"
         return True
 
+    # ---- долгоживущий воркер (одна авторизация librespot на весь сеанс) ----
+    def _spawn_worker(self):
+        # realtime="1", min_bitrate из config — фиксированы на весь сеанс воркера.
+        cmd = [sys.executable, "-m", "app.spotify_worker",
+               config.OUTPUT_TEMPLATE, config.AUDIO_FORMAT, config.UPLOAD_BITRATE,
+               "1", str(config.UPGRADE_MIN_BITRATE)]
+        w = subprocess.Popen(cmd, cwd="/app", stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, bufsize=1)
+        q = queue.Queue()
+
+        def _reader():
+            for line in w.stdout:          # одна JSON-строка результата на трек
+                q.put(line)
+            q.put(None)                    # EOF/смерть воркера
+
+        def _stderr_drain():
+            for line in w.stderr:          # диагностика → docker logs
+                print(f"[upgrade] {line.rstrip()}", flush=True)
+
+        threading.Thread(target=_reader, daemon=True).start()
+        threading.Thread(target=_stderr_drain, daemon=True).start()
+        self._worker, self._result_q = w, q
+        return w
+
+    def _ensure_worker(self):
+        if self._worker is None or self._worker.poll() is not None:
+            return self._spawn_worker()
+        return self._worker
+
+    def _kill_worker(self):
+        w = self._worker
+        self._worker, self._result_q = None, None
+        if w is None:
+            return
+        try:
+            if w.stdin:
+                w.stdin.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            w.terminate()
+        except Exception:  # noqa: BLE001
+            pass
+
     def _download(self, url: str, name: str) -> bool:
         if self._stop:
             return False
-        # safe="" (m3u не трогаем при апгрейде), realtime="1" (скорость прослушивания)
-        cmd = [sys.executable, "-m", "app.spotify_dl", url,
-               config.OUTPUT_TEMPLATE, config.AUDIO_FORMAT, config.UPLOAD_BITRATE, "", "1"]
-        env = dict(os.environ, UPGRADE_MIN_BITRATE=str(config.UPGRADE_MIN_BITRATE))
         try:
-            r = subprocess.run(cmd, cwd="/app", capture_output=True, text=True,
-                               timeout=_DL_TIMEOUT, env=env)
-        except subprocess.TimeoutExpired:
-            print(f"[upgrade] TIMEOUT {name}", flush=True)
+            w = self._ensure_worker()
+            q = self._result_q
+            w.stdin.write(url + "\n")
+            w.stdin.flush()
+        except Exception as exc:  # noqa: BLE001 — воркер умер при записи
+            print(f"[upgrade] воркер недоступен ({exc}) — перезапуск", flush=True)
+            self._kill_worker()
             return False
-        out = (r.stdout or "") + (r.stderr or "")
-        print(f"[upgrade] {name}\n{out}", flush=True)  # виден в docker logs
-        return r.returncode == 0 and "OK " in (r.stdout or "")
+        try:
+            line = q.get(timeout=_DL_TIMEOUT)
+        except queue.Empty:
+            print(f"[upgrade] TIMEOUT {name} — перезапуск воркера", flush=True)
+            self._kill_worker()
+            return False
+        if line is None:                   # воркер завершился
+            print(f"[upgrade] воркер завершился на {name} — перезапуск", flush=True)
+            self._kill_worker()
+            return False
+        try:
+            res = json.loads(line)
+        except (ValueError, TypeError):
+            return False
+        return bool(res.get("ok") or res.get("skipped"))
 
 
 controller = _UpgradeController()
