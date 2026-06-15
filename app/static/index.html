@@ -22,19 +22,21 @@
   </div>
 
   <header style="display:none" id="appheader">
-    <h1>🎵 spotdl <span class="muted small">web-ui</span></h1>
-    <nav>
-      <button data-view="errors" class="active">Ненайденные</button>
-      <button data-view="playlists">Плейлисты</button>
-      <button data-view="upgrade">Апгрейд 320k</button>
-      <button data-view="jobs">Задачи</button>
-    </nav>
-    <span class="spacer"></span>
-    <label class="small muted" id="safe-mode-label" title="Одиночные «Spotify 320k» качать в real-time (скорость прослушивания, анти-бан). Массовая закачка и апгрейд — всегда real-time." style="display:flex;align-items:center;gap:6px;cursor:pointer">
-      <input type="checkbox" id="safe-mode-toggle"> Безопасный режим
-    </label>
-    <button class="btn secondary" id="syncall-btn">Синхронизировать всё</button>
-    <button class="btn secondary" id="logout-btn">Выйти</button>
+    <div class="bar-inner">
+      <h1>🎵 spotdl <span class="muted small">web-ui</span></h1>
+      <nav>
+        <button data-view="errors" class="active">Ненайденные</button>
+        <button data-view="playlists">Плейлисты</button>
+        <button data-view="upgrade">Апгрейд 320k</button>
+        <button data-view="jobs">Задачи</button>
+      </nav>
+      <span class="spacer"></span>
+      <label class="small muted" id="safe-mode-label" title="Одиночные «Spotify 320k» качать в real-time (скорость прослушивания, анти-бан). Массовая закачка и апгрейд — всегда real-time." style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" id="safe-mode-toggle"> Безопасный режим
+      </label>
+      <button class="btn secondary" id="syncall-btn">Синхронизировать всё</button>
+      <button class="btn secondary" id="logout-btn">Выйти</button>
+    </div>
   </header>
 
   <main style="display:none" id="appmain">
@@ -46,14 +48,17 @@
         <select id="err-playlist-filter"><option value="">Все плейлисты</option></select>
         <span class="muted small" id="err-total"></span>
         <span class="spacer" style="flex:1"></span>
-        <label class="muted small">Источник:</label>
-        <select id="dl-mode" title="Откуда брать аудио при «Скачать все»">
-          <option value="url">из поля URL</option>
-          <option value="deezer">Deezer (по ISRC)</option>
-          <option value="spotify">Spotify 320k</option>
-        </select>
-        <button class="btn" id="err-download-all">Скачать все</button>
-        <button class="btn secondary" id="err-reload">Обновить</button>
+        <!-- правый кластер действий (не разрывается). Читается слева-направо:
+             обновить · «Скачать все» из выбранного источника. -->
+        <div class="tb-group">
+          <button class="btn secondary" id="err-reload" title="Перечитать список ненайденных треков с сервера">Обновить список</button>
+          <button class="btn" id="err-download-all">Скачать все</button>
+          <select id="dl-mode" title="Откуда брать аудио при «Скачать все»">
+            <option value="url">из поля URL</option>
+            <option value="deezer">Deezer (по ISRC)</option>
+            <option value="spotify">Spotify 320k</option>
+          </select>
+        </div>
       </div>
       <div id="errors-container"></div>
     </section>
@@ -109,11 +114,11 @@
 
   <!-- Панель задач (очередь + статусы) -->
   <div id="taskspanel">
-    <div class="taskshead">
+    <div class="taskshead" id="taskshead" title="Свернуть/развернуть">
       <span class="title">Задачи</span>
       <span class="muted small" id="tasks-summary"></span>
       <span class="spacer"></span>
-      <button class="btn secondary small" id="tasks-collapse" title="Свернуть/развернуть">▾</button>
+      <span class="collapse-ind" id="tasks-collapse" aria-hidden="true">▾</span>
     </div>
     <div id="taskslist"></div>
     <pre id="tasklog" style="display:none"></pre>

@@ -27,7 +27,7 @@ async function api(method, path, body) {
 
 function showApp() {
   document.getElementById("login-screen").style.display = "none";
-  document.getElementById("appheader").style.display = "flex";
+  document.getElementById("appheader").style.display = "block";
   document.getElementById("appmain").style.display = "block";
   loadErrors();
   loadStatus();
@@ -196,7 +196,7 @@ function renderErrors() {
     const groupRows = [];
     tracks.forEach(t => {
       const input = el("input", { type: "text", class: "yt-input", placeholder: "YouTube / YT-Music URL" });
-      const statusEl = el("span", { class: "rowstatus" }, [""]);
+      const statusEl = el("span", { class: "rowstatus" });
       const dlBtn = el("button", { class: "btn small" }, ["Скачать"]);
       const dzBtn = el("button", { class: "btn secondary small", title: "Скачать с Deezer по ISRC (нужен ARL) — для треков, которых нет на YouTube" }, ["Deezer"]);
       const ztBtn = el("button", { class: "btn secondary small", title: "Скачать напрямую со Spotify (librespot, 320k с Premium). Нужны креды Spotify." }, ["Spotify 320k"]);
@@ -226,7 +226,7 @@ function renderErrors() {
       tbody.appendChild(rowEl);
     });
 
-    const dlGroupBtn = el("button", { class: "btn small", title: "Скачать все треки этого плейлиста выбранным сверху источником" }, ["Скачать все"]);
+    const dlGroupBtn = el("button", { class: "btn", title: "Скачать все треки этого плейлиста выбранным сверху источником" }, ["Скачать все"]);
     dlGroupBtn.addEventListener("click", () => bulkDownload(groupRows));
 
     cont.appendChild(el("div", { class: "card" }, [
@@ -515,12 +515,76 @@ function updateCollapseArrow() {
   // развёрнуто (очередь видна) → стрелка вниз; свёрнуто (скрыто) → вверх
   document.getElementById("tasks-collapse").textContent = collapsed ? "▴" : "▾";
 }
-document.getElementById("tasks-collapse").addEventListener("click", () => {
+// клик по всей строке-шапке (а не по пиксельной кнопке) сворачивает/разворачивает
+document.getElementById("taskshead").addEventListener("click", () => {
   const collapsed = document.getElementById("taskspanel").classList.toggle("collapsed");
   if (collapsed) hideLog();           // сворачивание закрывает и открытый лог
   updateCollapseArrow();
 });
 updateCollapseArrow();
+
+// ----- изменение размера панели «Задачи» (ручка в левом-верхнем углу) -----
+// Панель закреплена за правый-нижний угол (right/bottom fixed), поэтому увеличение
+// ширины/высоты раздвигает её ВЛЕВО и ВВЕРХ — прочь от контента. Размер сохраняется.
+(function initTasksResize() {
+  const SIZE_KEY = "spotdl_tasks_size";
+  const MIN_W = 280, MIN_H = 160;
+  const panel = document.getElementById("taskspanel");
+  const handle = el("div", { class: "task-resize", title: "Потянуть — изменить размер" });
+  panel.appendChild(handle);
+
+  let lastSize = null;
+  function applySize(w, h) {
+    const maxW = window.innerWidth - 32, maxH = window.innerHeight - 32;
+    w = Math.max(MIN_W, Math.min(w, maxW));
+    h = Math.max(MIN_H, Math.min(h, maxH));
+    panel.style.width = w + "px";
+    // высоту НЕ фиксируем, а ограничиваем максимум: короткий список (1 задача)
+    // ужимает панель до своего размера, длинный — упирается в этот максимум и скроллится.
+    panel.style.height = "";
+    panel.style.maxHeight = h + "px";
+    panel.classList.add("resized");
+    lastSize = { w, h };
+    return lastSize;
+  }
+  // восстановить сохранённый размер
+  try {
+    const s = JSON.parse(localStorage.getItem(SIZE_KEY) || "null");
+    if (s && s.w && s.h) applySize(s.w, s.h);
+  } catch (e) { /* игнор */ }
+
+  let dragging = false, sx = 0, sy = 0, sw = 0, sh = 0;
+  handle.addEventListener("pointerdown", (e) => {
+    e.preventDefault(); e.stopPropagation();
+    dragging = true;
+    sx = e.clientX; sy = e.clientY;
+    const r = panel.getBoundingClientRect();
+    sw = r.width;
+    // отталкиваемся от текущего заданного максимума (а не от ужатого по контенту размера)
+    sh = panel.style.maxHeight ? parseFloat(panel.style.maxHeight) : r.height;
+    handle.setPointerCapture(e.pointerId);
+    document.body.style.userSelect = "none";
+  });
+  handle.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    // тянем верх-левый угол: влево → шире, вверх → выше (предел высоты)
+    applySize(sw + (sx - e.clientX), sh + (sy - e.clientY));
+  });
+  function endDrag() {
+    if (!dragging) return;
+    dragging = false;
+    document.body.style.userSelect = "";
+    if (lastSize) { try { localStorage.setItem(SIZE_KEY, JSON.stringify(lastSize)); } catch (e) { /* игнор */ } }
+  }
+  handle.addEventListener("pointerup", endDrag);
+  handle.addEventListener("pointercancel", endDrag);
+  handle.addEventListener("click", (e) => e.stopPropagation());  // не сворачивать по клику на ручке
+  // не вылезать за экран при уменьшении окна
+  window.addEventListener("resize", () => {
+    if (!panel.classList.contains("resized") || !lastSize) return;
+    applySize(lastSize.w, lastSize.h);
+  });
+})();
 
 function startTaskPolling() { pollTasks(); }
 
