@@ -1,0 +1,192 @@
+# AGENTS.md — handoff для ИИ-агента, продолжающего проект
+
+> Прочитай целиком перед работой. Здесь то, что НЕ видно из кода: модель деплоя,
+> выстраданные грабли, как тестировать, что секретно. UI и комментарии — на русском.
+
+## 1. Что это
+
+Самостоятельный веб-сервис в Docker: браузерный UI для управления локальной
+музыкальной библиотекой, которую качает **spotdl** из Spotify (аудио берётся со
+сторонних площадок — Spotify не отдаёт файлы напрямую). Музыку раздаёт уже
+работающий **Navidrome** (его не трогаем). Главные функции:
+- управление `playlists.txt` (формат `Имя|ссылка`), запуск `spotdl sync`;
+- **ручное добивание** треков, которые автопоиск не нашёл на YouTube;
+- несколько источников аудио (YouTube / Deezer / Spotify-напрямую / заливка файла);
+- **массовый апгрейд** библиотеки до 320k (Step 2).
+
+Стек: **FastAPI (Python) + ванильный JS SPA** (без фреймворков), один Docker-контейнер.
+FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы** (чтобы тяжёлые импорты
+не висели в веб-процессе). Тёмная тема под Navidrome.
+
+## 2. Модель деплоя (ВАЖНО — неочевидно)
+
+- **Эта Windows-машина — только разработка/тесты.** Боевой сервер отдельный:
+  **OpenMediaVault, Docker + Portainer.**
+- **CI/CD:** push в `main` → **GitHub Actions** ([.github/workflows/build.yml](.github/workflows/build.yml))
+  собирает образ и пушит в **GHCR** (`ghcr.io/bastearima/spotdl-webui:latest`, пакет
+  публичный) → в Portainer пользователь жмёт **Recreate с Re-pull**. Workflow
+  собирает обычным `docker build` + inline-кэш (НЕ `setup-buildx-action` — он падал
+  по таймауту к Docker Hub при тяге `moby/buildkit`).
+- Локально образ `FROM python:3.12-slim-bookworm` собрать можно, но боевой деплой —
+  только на сервере. Тома `/srv/dev-disk-by-uuid-…` — серверные.
+- В контейнере тома: `/conf` (данные spotdl) и `/music` (библиотека). Сервис бежит
+  под **998:100** (тот же uid, что Navidrome), umask 002, дроп привилегий в
+  [entrypoint.sh](entrypoint.sh) через gosu.
+- Память агента (факты проекта) лежит в
+  `~/.claude/projects/C--Users-user-Desktop-code-projects-spotdl-webui/memory/`
+  (`MEMORY.md` + `deploy-environment.md`, `deezer-fallback.md`, `zotify-upgrade.md`).
+  В Claude Code `MEMORY.md` подгружается автоматически.
+
+## 3. Источники аудио (как добить трек)
+
+1. **YouTube (spotdl)** — основной. Кнопка «Скачать» по ссылке YT/YT-Music из поля.
+2. **Deezer** ([app/deezer.py](app/deezer.py), [deezer_dl.py](app/deezer_dl.py)) — по
+   **ISRC** (точное совпадение), фолбэк — поиск по «артист+название» если нет ISRC.
+   Нужен **ARL-токен** (секрет!) в `/conf/deezer_arl.txt` или env `DEEZER_ARL`.
+   Расшифровка Blowfish, реализована сами (requests + pycryptodome). Free-аккаунт=128k.
+3. **Spotify напрямую** ([app/librespot_dl.py](app/librespot_dl.py) — ядро,
+   [spotify_dl.py](app/spotify_dl.py) — одноразовый CLI) через **librespot**: реальное
+   аудио со Spotify, **320k с Premium**. Берёт аудио по track-id через content_feeder
+   (НЕ через `api.spotify.com` — он даёт стойкий 429!). Метаданные/обложку даёт spotdl.
+   Кнопка «Spotify 320k». Нужны креды (см. §5).
+4. **Заливка файла** ([place_localfile.py](app/place_localfile.py)) — кнопка «📁 Файл»:
+   локальный файл → мета/обложка со Spotify → в библиотеку.
+5. **Резолв имён** ([resolve_names.py](app/resolve_names.py), `/api/resolve-names`):
+   когда spotdl записал в errors битое имя (`musicShelfRenderer`), фронт лениво
+   дорезолвливает настоящее имя со Spotify (публичный клиент, логин не нужен).
+
+Все «альтернативные» источники кладут файл через общий [app/library.py](app/library.py)
+`place_file()` (ffmpeg-конвертация в формат библиотеки + теги/обложка + лёгкая
+дозапись в m3u без полного sync). Формат — **mp3 320k** (`UPLOAD_BITRATE=320k`).
+
+## 4. Анти-бан (критично для Spotify-источника!)
+
+- **Real-time скачивание**: librespot-поток тормозится под длительность трека
+  (`librespot_dl._pace_sleep`, идентично Zotify `--download-real-time`). Качается
+  ~со скоростью прослушивания → «как живой слушатель».
+- **Idle-пауза между треками** (`jobs.bulk_pause`, `ZOTIFY_BULK_WAIT_MIN/MAX`=5/15с)
+  поверх real-time (аналог Zotify `bulk_wait_time`).
+- Кто когда: **массовая закачка + апгрейд → всегда real-time + пауза**; одиночные
+  «Spotify 320k» → real-time только при включённой галочке **«Безопасный режим»**
+  (тумблер в шапке UI, `ZOTIFY_SAFE_MODE`, хранится в `/conf/.webui-settings.json`).
+- Риск бана аккаунта Spotify остаётся ненулевым — это эвристики. Пользователь
+  принял риск (свой Premium). Можно `UPGRADE_PER_DAY` (лимит в сутки).
+
+## 5. Секреты (НИКОГДА не коммитить, не вшивать в образ)
+
+- `APP_AUTH_TOKEN` — пароль входа в UI (env).
+- `/conf/cookies.txt` — YouTube cookies (Netscape).
+- `/conf/deezer_arl.txt` или `DEEZER_ARL` — Deezer ARL.
+- `/conf/zotify_credentials.json` — креды librespot. Пользователь входит в Spotify
+  **через Facebook** → username/password НЕ работает. Генерация только через **OAuth**:
+  `docker exec -it spotdl-webui python -m app.gen_zotify_creds /conf/zotify_credentials.json`
+  (печатает ссылку → открыть в браузере на ПК → войти через FB → скопировать `code`
+  из redirect-URL `http://127.0.0.1:5588/login?code=…` (страница не загрузится — норма)
+  → вставить в терминал). client_id keymaster `65b708073fc0480ea92a077233ca87bd`.
+
+## 6. Очередь задач и апгрейд
+
+- [app/jobs.py](app/jobs.py): две дорожки воркеров — **interactive** (ручные действия)
+  и **background** (тяжёлый автосинк/«Синхронизировать всё»). Файловый лок на плейлист
+  (`/conf/.webui-locks/`). Логи задач в памяти (cap 4000 строк) + дублируются в
+  `docker logs`. Панель «Задачи» справа снизу (статусы, отмена, удаление, копирование
+  лога, инкрементальный рендер чтобы не сбрасывать выделение).
+- **Step 2 — апгрейд** ([app/upgrade.py](app/upgrade.py)): фоновый поток проходит по
+  всем трекам библиотеки (union из `*.spotdl` в `/conf`), качает 320k, заменяет файл.
+  Метка «уже 320k» персистентна (`/conf/.webui-upgraded.json`) → не качает повторно,
+  переживает рестарт. Пропуск уже-хороших файлов по битрейту (`UPGRADE_MIN_BITRATE=300`).
+  **Долгоживущий воркер** ([app/spotify_worker.py](app/spotify_worker.py)) — ОДНА
+  авторизация librespot на весь сеанс (вместо новой на трек): меньше нагрузки и
+  ban-риска. Контроллер общается с ним по stdin(URL)/stdout(JSON), result-queue +
+  reader/stderr-потоки, таймаут `UPGRADE_TRACK_TIMEOUT`(1200с), авто-рестарт.
+  UI: вкладка «Апгрейд 320k» (старт/стоп, прогресс, ETA).
+
+## 7. Выстраданные грабли (не сломай!)
+
+- **НЕ** использовать образ `spotdl/spotify-downloader:latest` (падает на `libresolv.so.2`).
+  База — `python:3.12-slim-bookworm`.
+- **deno** ставить РЕАЛЬНЫМ файлом в `/usr/local/bin` (не симлинком в `/root` —
+  uid 998 туда не пускает). **git** нужен в apt (для `pip install` librespot/zotify из github).
+- **cwd=/** для запуска spotdl: spotdl 4.5.0 sanitize вырезает `/` из пути `--m3u` →
+  относительный путь от cwd. Из `/` резолвится в `/music/...`. Python-подпроцессы
+  (spotify_dl и т.п.) запускаются с **cwd=/app** (для `python -m app.x`).
+- spotdl пишет `--save-errors` в режиме ДОЗАПИСИ → дубли. errors_parser дедуплицирует
+  + перед каждым sync errors-файл сбрасывается.
+- m3u пути на Linux **абсолютные** (`/music/...`); на Windows `Path` ведёт себя иначе —
+  локальные тесты путей вводят в заблуждение.
+- spotdl sync пишет в m3u ВЕСЬ список плейлиста (не только скачанное) → добитый трек
+  попадает в m3u при следующем sync.
+
+## 8. Как тестировать локально (Windows)
+
+- Можно: парсинг (`python tests/test_naming.py`, 10 тестов), логику jobs/upgrade/parser
+  со стабами, IPC воркера со стаб-скриптом, Deezer-поиск/скачивание вживую (ARL есть в
+  истории чата, но лучше попросить заново), резолв имён вживую (публичный spotdl-клиент).
+- Нельзя без кред/сервера: librespot-стрим (нужен credentials.json + риск аккаунта),
+  ffmpeg может отсутствовать локально, `cwd="/app"` не существует на Windows (подпроцессы
+  с этим cwd локально падают — это НЕ баг, на сервере ок).
+- Запуск локально: `CONF_DIR=./_d/conf MUSIC_DIR=./_d/music APP_AUTH_TOKEN=dev
+  AUTOSYNC_INTERVAL_HOURS=0 python -m uvicorn app.main:app --port 8000`.
+- Проверки перед коммитом: `python -c "import ast,glob;[ast.parse(open(f,encoding='utf-8').read()) for f in glob.glob('app/*.py')]"`,
+  `node --check app/static/app.js`, `python tests/test_naming.py`,
+  `python -c "import yaml;yaml.safe_load(open('docker-compose.yml'))"`.
+
+## 9. Конвенции
+
+- UI-текст и комментарии — **на русском**.
+- Коммит/пуш — **только по явной просьбе пользователя**. Он на `main` (это деплой-ветка,
+  с неё CI). Сообщения коммита заканчивать `Co-Authored-By: Claude …`.
+- При фиксах больших фич — был прогон `/code-review` перед запуском апгрейда. Полезно
+  повторять для рискованных изменений (тысячи треков).
+- PowerShell vs Bash: для многострочного `git commit -m` в Bash используй `-F -` с
+  here-doc (НЕ PowerShell `@'...'@` — он влезет `@` в сообщение).
+
+## 10. Структура
+
+```
+app/main.py          FastAPI, маршруты, auth (токен в заголовке)
+app/config.py        пути/шаблоны/флаги из env
+app/jobs.py          очередь (2 дорожки), воркеры, лок, запуск spotdl, throttle, планировщик
+app/naming.py        safe-имя/md5-id/тип URL (покрыто тестами!)
+app/playlists.py     playlists.txt
+app/errors_parser.py разбор errors/*.txt (+дедуп), удаление добитых
+app/health.py        проверка окружения (cookies/права/deno) → баннер
+app/library.py       place_file: путь+ffmpeg+теги+обложка+m3u; target_path/file_bitrate
+app/librespot_dl.py  ядро скачивания через librespot (сессия снаружи, real-time)
+app/spotify_dl.py    одноразовый CLI скачивания (ручные кнопки)
+app/spotify_worker.py долгоживущий воркер (1 авторизация на апгрейд)
+app/deezer.py        Deezer: ISRC/поиск + скачивание+расшифровка
+app/deezer_dl.py     Deezer-фолбэк CLI
+app/place_localfile.py заливка локального файла CLI
+app/resolve_names.py резолв реальных имён со Spotify CLI
+app/gen_zotify_creds.py OAuth-генерация credentials.json (FB-вход)
+app/settings.py      рантайм-настройки (безопасный режим)
+app/upgrade.py       Step 2: массовый апгрейд (контроллер + воркер)
+app/static/          index.html, app.js, style.css (тёмная SPA)
+Dockerfile           самодостаточный образ (ffmpeg+spotdl+deno+git+app)
+.github/workflows/build.yml  CI → GHCR
+docker-compose.yml   стек для Portainer (image из GHCR), env с комментариями
+README.md            полная документация (рус): деплой, env, источники, troubleshooting
+```
+
+## 11. Состояние / возможные следующие задачи
+
+- Сделано: все источники, анти-бан (real-time+пауза), Step 2 с долгоживущим воркером,
+  резолв битых имён, фиксы из code-review.
+- Опционально (из ревью, не критично): общий хелпер для одинаковых хвостов
+  `_run_deezer/_run_zotify/_run_upload`; таблица источник→endpoint в JS вместо дублей.
+- **FLAC-апгрейд** — обсуждался: возможен той же схемой, но FLAC даёт ТОЛЬКО платный
+  lossless-сервис (Deezer HiFi / Qobuz / Tidal по ISRC, streamrip/deemix). Spotify FLAC
+  не отдаёт. Нужен платный аккаунт — пока не делаем.
+- **Запрошено: редизайн UI/UX под Apple Human Interface Guidelines** (см. ниже).
+
+### Задача: редизайн под Apple HIG
+Цель — переосмыслить [app/static/style.css](app/static/style.css) (и при нужде разметку
+[index.html](app/static/index.html)) в стиле Apple: системный шрифт
+`-apple-system, BlinkMacSystemFont, "SF Pro"`, больше воздуха, мягкие тени, скругления
+~10–12px, спокойная палитра (light/dark по prefers-color-scheme), сегментированные
+контролы вместо вкладок-кнопок, аккуратные «капсульные» кнопки с состояниями
+hover/active, тонкие разделители, таблицы → карточки/списки в духе iOS Settings.
+Логику/JS не ломать (id/классы, на которые завязан app.js, сохранять или править
+синхронно). Делать инкрементально, проверять `node --check app/static/app.js`.
+```
