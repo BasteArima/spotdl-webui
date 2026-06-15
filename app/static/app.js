@@ -3,6 +3,39 @@
 const TOKEN_KEY = "spotdl_webui_token";
 let TOKEN = localStorage.getItem(TOKEN_KEY) || "";
 
+// ------------------------------------------------------------------ тема оформления
+// Циклично: системная → светлая → тёмная → синяя (палитра старого дизайна).
+// Выбор хранится в localStorage и применяется через атрибут data-theme на <html>
+// (см. style.css). «auto» = убрать атрибут → следовать prefers-color-scheme.
+const THEME_KEY = "spotdl_theme";
+const THEMES = [
+  { id: "auto",  icon: "🌓", name: "Тема: системная" },
+  { id: "light", icon: "☀️", name: "Тема: светлая" },
+  { id: "dark",  icon: "🌙", name: "Тема: тёмная" },
+  { id: "blue",  icon: "🌌", name: "Тема: синяя (старый дизайн)" },
+];
+let THEME_IDX = 0;
+function applyTheme(id) {
+  const root = document.documentElement;
+  if (id === "auto") root.removeAttribute("data-theme");
+  else root.setAttribute("data-theme", id);
+  const t = THEMES.find(x => x.id === id) || THEMES[0];
+  const btn = document.getElementById("theme-btn");
+  if (btn) { btn.textContent = t.icon; btn.title = t.name; }
+}
+(function initTheme() {
+  const saved = localStorage.getItem(THEME_KEY) || "auto";
+  const idx = THEMES.findIndex(t => t.id === saved);
+  THEME_IDX = idx >= 0 ? idx : 0;
+  applyTheme(THEMES[THEME_IDX].id);
+})();
+document.getElementById("theme-btn").addEventListener("click", () => {
+  THEME_IDX = (THEME_IDX + 1) % THEMES.length;
+  const id = THEMES[THEME_IDX].id;
+  localStorage.setItem(THEME_KEY, id);
+  applyTheme(id);
+});
+
 function authHeaders(extra) {
   // Токен передаётся ТОЛЬКО в заголовке, никогда в URL/query.
   return Object.assign({ "Authorization": "Bearer " + TOKEN }, extra || {});
@@ -196,7 +229,6 @@ function renderErrors() {
     const groupRows = [];
     tracks.forEach(t => {
       const input = el("input", { type: "text", class: "yt-input", placeholder: "YouTube / YT-Music URL" });
-      const statusEl = el("span", { class: "rowstatus" });
       const dlBtn = el("button", { class: "btn small" }, ["Скачать"]);
       const dzBtn = el("button", { class: "btn secondary small", title: "Скачать с Deezer по ISRC (нужен ARL) — для треков, которых нет на YouTube" }, ["Deezer"]);
       const ztBtn = el("button", { class: "btn secondary small", title: "Скачать напрямую со Spotify (librespot, 320k с Premium). Нужны креды Spotify." }, ["Spotify 320k"]);
@@ -205,15 +237,18 @@ function renderErrors() {
       const displayName = RESOLVED[t.spotify_url] || t.song || "";
       const nameCell = el("td", { class: "err-name" }, [displayName || el("span", { class: "muted" }, ["(имя не распознано)"])]);
       const ytLink = el("a", { href: "https://music.youtube.com/search?q=" + encodeURIComponent(displayName), target: "_blank", rel: "noopener" }, ["искать на YT ↗"]);
+      // блок кнопок-источников и блок статуса (показывается ВМЕСТО кнопок, пока идёт задача)
+      const buttonsWrap = el("span", { class: "err-buttons" }, [dlBtn, dzBtn, ztBtn, fileBtn, fileInput]);
+      const statusWrap = el("span", { class: "err-status", style: "display:none" });
       const rowEl = el("tr", {}, [
         nameCell,
         el("td", {}, [el("span", { class: "tag err" }, [t.error_type || "?"])]),
         el("td", {}, [el("a", { href: t.spotify_url, target: "_blank", rel: "noopener" }, ["Spotify ↗"])]),
         el("td", {}, [ytLink]),
         el("td", {}, [input]),
-        el("td", { class: "err-actions" }, [dlBtn, dzBtn, ztBtn, fileBtn, fileInput, statusEl]),
+        el("td", { class: "err-actions" }, [buttonsWrap, statusWrap]),
       ]);
-      const row = { spotify_url: t.spotify_url, safe: g.safe, input, statusEl, rowEl, nameCell, ytLink, song: displayName };
+      const row = { spotify_url: t.spotify_url, safe: g.safe, input, rowEl, nameCell, ytLink, song: displayName, buttonsWrap, statusWrap, jobId: null };
       ROWS.push(row); groupRows.push(row);
       dlBtn.addEventListener("click", () => enqueueDownloads([row]));
       dzBtn.addEventListener("click", () => tryDeezer(row));
@@ -223,6 +258,7 @@ function renderErrors() {
         if (fileInput.files && fileInput.files[0]) uploadFile(row, fileInput.files[0]);
         fileInput.value = "";
       });
+      input.addEventListener("input", () => input.classList.remove("input-bad"));  // сбросить подсветку неверной ссылки
       tbody.appendChild(rowEl);
     });
 
@@ -259,6 +295,48 @@ function renderErrors() {
   resolveBadNames(ROWS);
 }
 
+// Состояние строки: показываем ЛИБО кнопки-источники (idle), ЛИБО компактный статус
+// (queued/running/error) ВМЕСТО них. Детали и лог — в панели «Задачи».
+// opts: { jobId — для кнопки отмены, pos — позиция в очереди }.
+function setRowState(row, state, opts) {
+  opts = opts || {};
+  const sw = row.statusWrap;
+  sw.innerHTML = "";
+  if (state === "idle") {
+    row.rowEl.classList.remove("row-active", "row-error");
+    row.buttonsWrap.style.display = "";
+    sw.style.display = "none";
+    row.input.disabled = false;
+    return;
+  }
+  row.buttonsWrap.style.display = "none";
+  sw.style.display = "inline-flex";
+
+  if (state === "queued" || state === "running") {
+    row.rowEl.classList.add("row-active");
+    row.rowEl.classList.remove("row-error");
+    row.input.disabled = true;
+    sw.appendChild(el("span", { class: "st-spin" }));
+    sw.appendChild(el("span", { class: "st-label" }, [
+      state === "running" ? "Идёт…" : (opts.pos ? `В очереди #${opts.pos}` : "В очереди"),
+    ]));
+    if (opts.jobId != null) {
+      const cancel = el("button", { class: "st-act", title: "Отменить" }, ["✕"]);
+      cancel.addEventListener("click", () => cancelJob(opts.jobId));
+      sw.appendChild(cancel);
+    }
+  } else if (state === "error") {
+    row.rowEl.classList.add("row-error");
+    row.rowEl.classList.remove("row-active");
+    row.input.disabled = false;
+    sw.appendChild(el("span", { class: "st-icon err" }, ["⚠"]));
+    sw.appendChild(el("span", { class: "st-label err" }, ["Ошибка"]));
+    const retry = el("button", { class: "st-act retry", title: "Вернуть кнопки и попробовать снова" }, ["Повторить"]);
+    retry.addEventListener("click", () => setRowState(row, "idle"));
+    sw.appendChild(retry);
+  }
+}
+
 // Поставить в очередь скачивание для набора строк (1 или много) — НЕ блокирует.
 async function enqueueDownloads(rows) {
   rows = (rows || []).filter(r => r.input.value.trim());
@@ -267,8 +345,8 @@ async function enqueueDownloads(rows) {
   const bad = rows.filter(r => validateSource(r.input.value));
   if (bad.length) {
     bad.forEach(r => {
-      r.statusEl.className = "rowstatus error";
-      r.statusEl.textContent = " " + validateSource(r.input.value);
+      r.input.classList.add("input-bad");
+      r.input.title = validateSource(r.input.value);  // подсветить поле + подсказка, кнопки не трогаем
     });
     rows = rows.filter(r => !validateSource(r.input.value));
     if (!rows.length) { toast("Ссылка-источник некорректна"); return; }
@@ -283,10 +361,9 @@ async function enqueueDownloads(rows) {
     (data.downloads || []).forEach(d => {
       const row = rows.find(r => r.spotify_url === d.spotify_url);
       if (row) {
+        row.jobId = d.id;
         PENDING.set(d.id, row);
-        row.input.disabled = true;
-        row.statusEl.className = "rowstatus queued";
-        row.statusEl.textContent = " в очереди";
+        setRowState(row, "queued", { jobId: d.id });
       }
     });
     toast(`В очередь: ${(data.downloads || []).length} трек(ов)` +
@@ -299,16 +376,16 @@ async function enqueueDownloads(rows) {
 // Попытка скачать трек из альтернативного источника (Deezer/Spotify).
 // quiet=true (для массовой) подавляет тост/опрос на каждую строку — их делают раз.
 async function trySource(row, endpoint, label, extra, quiet) {
-  row.statusEl.className = "rowstatus queued";
-  row.statusEl.textContent = ` ${label} в очереди`;
+  setRowState(row, "queued");  // ещё без jobId — кнопка отмены появится после ответа
   try {
     const body = Object.assign({ spotify_url: row.spotify_url, safe: row.safe }, extra || {});
     const data = await api("POST", endpoint, body);
+    row.jobId = data.job.id;
     PENDING.set(data.job.id, row);
+    setRowState(row, "queued", { jobId: data.job.id });
     if (!quiet) { toast(`Попытка ${label} в очереди`); showTasks(); pollTasks(); }
   } catch (e) {
-    row.statusEl.className = "rowstatus error";
-    row.statusEl.textContent = " " + e.message;
+    setRowState(row, "error");
     if (!quiet) toast(`${label}: ${e.message}`);
   }
 }
@@ -320,23 +397,20 @@ async function uploadFile(row, file) {
   fd.append("spotify_url", row.spotify_url);
   fd.append("safe", row.safe);
   fd.append("file", file);
-  row.statusEl.className = "rowstatus queued";
-  row.statusEl.textContent = " загрузка файла…";
+  setRowState(row, "queued");
   try {
     // НЕ задаём Content-Type — браузер сам выставит multipart boundary.
     const res = await fetch("/api/upload", { method: "POST", headers: authHeaders(), body: fd });
     if (res.status === 401) { logout(); return; }
     let data = null; try { data = await res.json(); } catch (e) {}
     if (!res.ok) throw new Error((data && data.detail) || ("HTTP " + res.status));
+    row.jobId = data.job.id;
     PENDING.set(data.job.id, row);
-    row.input.disabled = true;
-    row.statusEl.className = "rowstatus queued";
-    row.statusEl.textContent = " файл в очереди";
+    setRowState(row, "queued", { jobId: data.job.id });
     toast("Файл «" + file.name + "» в очереди");
     showTasks(); pollTasks();
   } catch (e) {
-    row.statusEl.className = "rowstatus error";
-    row.statusEl.textContent = " " + e.message;
+    setRowState(row, "error");
     toast("Ошибка заливки: " + e.message);
   }
 }
@@ -615,23 +689,19 @@ async function pollTasks() {
     const row = PENDING.get(j.id);
     if (!row) return;
     if (j.status === "running") {
-      row.statusEl.className = "rowstatus running"; row.statusEl.textContent = " идёт…";
+      setRowState(row, "running", { jobId: j.id });
     } else if (j.status === "done") {
       row.rowEl.classList.add("row-done");
       setTimeout(() => { if (row.rowEl.parentNode) row.rowEl.parentNode.removeChild(row.rowEl); }, 400);
       PENDING.delete(j.id);
     } else if (j.status === "error") {
-      row.rowEl.classList.add("row-error");
-      row.input.disabled = false;
-      row.statusEl.className = "rowstatus error"; row.statusEl.textContent = " ошибка — см. лог";
+      setRowState(row, "error");           // компактный «⚠ Ошибка · Повторить», детали — в панели
       PENDING.delete(j.id);
     } else if (j.status === "cancelled") {
-      row.input.disabled = false;
-      row.statusEl.className = "rowstatus cancelled"; row.statusEl.textContent = " отменено";
+      setRowState(row, "idle");            // вернуть кнопки-источники
       PENDING.delete(j.id);
     } else if (j.status === "queued") {
-      row.statusEl.className = "rowstatus queued";
-      row.statusEl.textContent = j.queue_pos ? ` в очереди (#${j.queue_pos})` : " в очереди";
+      setRowState(row, "queued", { jobId: j.id, pos: j.queue_pos });
     }
   });
 

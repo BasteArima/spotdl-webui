@@ -41,9 +41,11 @@
   --nav-bg:        rgba(245,245,247,.8);
 }
 
-/* --- Тёмная тема (слоистый серый, без чистого чёрного) --------------------- */
+/* --- Тёмная тема (слоистый серый, без чистого чёрного) ---------------------
+   Набор переменных тёмной темы; применяется и для авто (системная тёмная,
+   когда тема не выбрана вручную), и для явного выбора data-theme="dark". */
 @media (prefers-color-scheme: dark) {
-  :root {
+  html:not([data-theme]) {
     --bg:           #161618;
     --bg2:          #252528;
     --bg3:          #343438;
@@ -69,6 +71,60 @@
     --shadow-lg:    0 12px 40px rgba(0,0,0,.6);
     --nav-bg:       rgba(22,22,24,.78);
   }
+}
+/* Явный выбор тёмной темы (кнопка в шапке) — те же значения, без зависимости от системы. */
+html[data-theme="dark"] {
+  --bg:           #161618;
+  --bg2:          #252528;
+  --bg3:          #343438;
+  --fill:         rgba(120,120,128,.18);
+  --fill-strong:  rgba(120,120,128,.30);
+  --fg:           #f5f5f7;
+  --muted:        #98989e;
+  --accent:       #34c759;
+  --accent-press: #2eb150;
+  --accent-soft:  rgba(52,199,89,.16);
+  --accent-soft-h: rgba(52,199,89,.26);
+  --accent-fg:    #06210f;
+  --accent2:      #4aa3ff;
+  --danger:       #ff453a;
+  --danger-soft:  rgba(255,69,58,.18);
+  --danger-fg:    #ffffff;
+  --warn:         #ff9f0a;
+  --border:       rgba(255,255,255,.12);
+  --seg-sel:      #5a5a5e;
+  --console-bg:   #161618;
+  --shadow-sm:    0 1px 2px rgba(0,0,0,.35);
+  --shadow:       0 4px 16px rgba(0,0,0,.45);
+  --shadow-lg:    0 12px 40px rgba(0,0,0,.6);
+  --nav-bg:       rgba(22,22,24,.78);
+}
+/* Синяя тёмная тема — палитра «старого дизайна» (в тон Navidrome). */
+html[data-theme="blue"] {
+  --bg:           #14171c;
+  --bg2:          #1c2128;
+  --bg3:          #283039;
+  --fill:         rgba(120,140,170,.12);
+  --fill-strong:  rgba(120,140,170,.22);
+  --fg:           #e6e9ef;
+  --muted:        #8b95a5;
+  --accent:       #1db954;
+  --accent-press: #18a046;
+  --accent-soft:  rgba(29,185,84,.16);
+  --accent-soft-h: rgba(29,185,84,.26);
+  --accent-fg:    #08210f;
+  --accent2:      #4ea1e0;
+  --danger:       #e05260;
+  --danger-soft:  rgba(224,82,96,.16);
+  --danger-fg:    #ffffff;
+  --warn:         #d9a441;
+  --border:       #2c333d;
+  --seg-sel:      #2f3a48;
+  --console-bg:   #0f1216;
+  --shadow-sm:    0 1px 2px rgba(0,0,0,.4);
+  --shadow:       0 4px 16px rgba(0,0,0,.5);
+  --shadow-lg:    0 12px 40px rgba(0,0,0,.62);
+  --nav-bg:       rgba(24,29,37,.8);
 }
 
 * { box-sizing: border-box; }
@@ -158,6 +214,8 @@ button.btn.small:not(.secondary):not(.danger):hover { background: var(--accent-s
 button.btn.danger.small { background: var(--danger-soft); color: var(--danger); }
 button.btn.danger.small:hover { background: var(--danger-soft); filter: brightness(1.1); }
 button.btn:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+/* квадратная кнопка-иконка (переключатель темы в шапке) */
+button.btn.icon-btn { padding: 0; width: var(--ctl-h); font-size: 15px; line-height: 1; }
 
 /* ---------------------------------------------------------------- поля ввода */
 input, select {
@@ -288,15 +346,8 @@ tr:hover td { background: color-mix(in srgb, var(--fill) 55%, transparent); }
   white-space: pre-wrap; word-break: break-word; color: var(--fg); background: var(--console-bg);
 }
 
-/* статусы */
-.rowstatus { font-size: 11px; }
-.rowstatus.queued { color: var(--muted); }
-.rowstatus.running { color: var(--accent2); }
-.rowstatus.done { color: var(--accent); }
-.rowstatus.error { color: var(--danger); }
-.rowstatus.cancelled { color: var(--warn); }
+/* статусы задач (панель) + строки таблицы «Ненайденные» */
 tr.row-done { opacity: .45; }
-tr.row-error td { background: var(--danger-soft); }
 .status {
   font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 980px; white-space: nowrap;
 }
@@ -347,13 +398,27 @@ tr.row-error td { background: var(--danger-soft); }
    длинное имя при этом переносится, а не вылезает на соседей. */
 #errors-container th:first-child,
 #errors-container td.err-name { width: 100%; overflow-wrap: anywhere; word-break: break-word; }
-/* действия прижаты к правому краю — под групповой кнопкой «Скачать все»;
-   ровные промежутки между кнопками, перенос только при нехватке места */
+/* действия прижаты к правому краю — под групповой кнопкой «Скачать все» */
 #errors-container td.err-actions { text-align: right; padding-right: 0; }
-.err-actions > * { display: inline-flex; vertical-align: middle; margin: 3px 0 3px 6px; }
-.err-actions .rowstatus { font-size: 11px; }
-/* пустой статус не должен сдвигать кнопки от правого края */
-.err-actions .rowstatus:empty { margin: 0; }
+/* блок кнопок-источников: одна строка (nowrap), чтобы колонка не схлопывалась */
+.err-buttons { display: inline-flex; flex-wrap: nowrap; align-items: center; gap: 6px; vertical-align: middle; }
+/* блок статуса — показывается ВМЕСТО кнопок, пока идёт задача (см. setRowState) */
+.err-status { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; white-space: nowrap; vertical-align: middle; }
+.err-status .st-label { color: var(--muted); }
+.err-status .st-label.err, .err-status .st-icon.err { color: var(--danger); font-weight: 600; }
+.err-status .st-icon { font-size: 13px; }
+.err-status .st-act { background: transparent; border: none; cursor: pointer; font-size: 12px; color: var(--muted); padding: 2px 6px; border-radius: 5px; line-height: 1; }
+.err-status .st-act:hover { color: var(--fg); background: var(--fill); }
+.err-status .st-act.retry { color: var(--accent2); font-weight: 600; }
+.err-status .st-act.retry:hover { background: var(--accent-soft); color: var(--accent2); }
+/* спиннер */
+.st-spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--fill-strong); border-top-color: var(--accent); animation: st-rot .7s linear infinite; }
+@keyframes st-rot { to { transform: rotate(360deg); } }
+/* мягкая подсветка строки по состоянию (детали — в панели «Задачи») */
+#errors-container tr.row-active td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+#errors-container tr.row-error td  { background: color-mix(in srgb, var(--danger) 8%, transparent); }
+/* неверная ссылка-источник в поле */
+.yt-input.input-bad { box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 45%, transparent); }
 
 .yt-input { width: 150px; max-width: 100%; }
 
