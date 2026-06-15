@@ -153,7 +153,20 @@ tr.row-error td { background: rgba(224,82,96,.08); }
   table { min-width: 560px; }
 }
 
-.yt-input { width: 100%; min-width: 160px; }
+.yt-input { width: 200px; max-width: 100%; }
+
+/* ----- таблица «Ненайденные»: компактные ряды, аккуратный перенос ----- */
+#errors-container td { vertical-align: middle; padding: 7px 10px; }
+/* длинные имена (в т.ч. японские без пробелов) переносим, а не растягиваем ряд */
+.err-name { max-width: 340px; overflow-wrap: anywhere; word-break: break-word; }
+/* кнопки действия — в один ряд, переносятся на след. строку только при нехватке места */
+.err-actions { white-space: normal; }
+.err-actions > * { display: inline-flex; vertical-align: middle; margin: 2px 4px 2px 0; }
+.err-actions .btn.small { padding: 5px 9px; }
+.err-actions .rowstatus { font-size: 11px; }
+/* колонки с короткими значениями не должны расти */
+#errors-container th, #errors-container td { white-space: nowrap; }
+.err-name, .err-actions { white-space: normal; }
 .modal-bg {
   position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none;
   align-items: center; justify-content: center; z-index: 100;

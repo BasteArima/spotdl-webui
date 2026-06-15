@@ -131,9 +131,36 @@ document.querySelectorAll("nav button").forEach(b => {
 let ERROR_GROUPS = [];
 // ROWS: все строки треков с привязкой к DOM, чтобы убирать/помечать их по факту
 // завершения задач (без перерисовки всей таблицы).
-let ROWS = [];          // {spotify_url, safe, input, statusEl, rowEl}
+let ROWS = [];          // {spotify_url, safe, input, statusEl, rowEl, nameCell, ytLink, song}
 // PENDING: job.id -> ROW, для удаления строки по завершении её задачи скачивания
 let PENDING = new Map();
+// RESOLVED: spotify_url -> настоящее имя (дорезолвленное со Spotify для битых, напр. musicShelfRenderer)
+let RESOLVED = {};
+
+// Имя считается «битым», если пустое, содержит внутренние ключи YTM или не имеет
+// разделителя «Артист - Название» (spotdl-имя всегда вида "Artist - Title").
+function badName(s) {
+  if (!s) return true;
+  if (/Renderer\b|musicShelf|ResponsiveListItem|sectionList/i.test(s)) return true;
+  return !s.includes(" - ");
+}
+
+async function resolveBadNames(rows) {
+  const bad = rows.filter(r => badName(r.song) && !RESOLVED[r.spotify_url]);
+  if (!bad.length) return;
+  const urls = [...new Set(bad.map(r => r.spotify_url))];
+  let names;
+  try { names = await api("POST", "/api/resolve-names", { urls }); }
+  catch (e) { return; }
+  rows.forEach(r => {
+    const nm = names[r.spotify_url];
+    if (!nm) return;
+    RESOLVED[r.spotify_url] = nm;
+    r.song = nm;
+    r.nameCell.textContent = nm;
+    r.ytLink.href = "https://music.youtube.com/search?q=" + encodeURIComponent(nm);
+  });
+}
 
 async function loadErrors() {
   try {
@@ -175,16 +202,18 @@ function renderErrors() {
       const ztBtn = el("button", { class: "btn secondary small", title: "Скачать напрямую со Spotify (librespot, 320k с Premium). Нужны креды Spotify." }, ["Spotify 320k"]);
       const fileInput = el("input", { type: "file", accept: "audio/*,.mp3,.flac,.m4a,.opus,.ogg,.wav", style: "display:none" });
       const fileBtn = el("button", { class: "btn secondary small", title: "Залить локальный файл — получит мету и обложку со Spotify" }, ["📁 Файл"]);
-      const q = encodeURIComponent(t.song || "");
+      const displayName = RESOLVED[t.spotify_url] || t.song || "";
+      const nameCell = el("td", { class: "err-name" }, [displayName || el("span", { class: "muted" }, ["(имя не распознано)"])]);
+      const ytLink = el("a", { href: "https://music.youtube.com/search?q=" + encodeURIComponent(displayName), target: "_blank", rel: "noopener" }, ["искать на YT ↗"]);
       const rowEl = el("tr", {}, [
-        el("td", {}, [t.song || el("span", { class: "muted" }, ["(имя не распознано)"])]),
+        nameCell,
         el("td", {}, [el("span", { class: "tag err" }, [t.error_type || "?"])]),
         el("td", {}, [el("a", { href: t.spotify_url, target: "_blank", rel: "noopener" }, ["Spotify ↗"])]),
-        el("td", {}, [el("a", { href: "https://music.youtube.com/search?q=" + q, target: "_blank", rel: "noopener" }, ["искать на YT ↗"])]),
+        el("td", {}, [ytLink]),
         el("td", {}, [input]),
-        el("td", {}, [el("div", { class: "row" }, [dlBtn, dzBtn, ztBtn, fileBtn, fileInput, statusEl])]),
+        el("td", { class: "err-actions" }, [dlBtn, dzBtn, ztBtn, fileBtn, fileInput, statusEl]),
       ]);
-      const row = { spotify_url: t.spotify_url, safe: g.safe, input, statusEl, rowEl };
+      const row = { spotify_url: t.spotify_url, safe: g.safe, input, statusEl, rowEl, nameCell, ytLink, song: displayName };
       ROWS.push(row); groupRows.push(row);
       dlBtn.addEventListener("click", () => enqueueDownloads([row]));
       dzBtn.addEventListener("click", () => tryDeezer(row));
@@ -225,6 +254,9 @@ function renderErrors() {
   const grand = ERROR_GROUPS.reduce((n, g) => n + g.tracks.length, 0);
   document.getElementById("err-total").textContent =
     grand ? `всего ненайдено: ${grand}` + (total !== grand ? ` (показано: ${total})` : "") : "";
+
+  // дорезолвить настоящие имена для строк с битым именем (musicShelfRenderer и т.п.)
+  resolveBadNames(ROWS);
 }
 
 // Поставить в очередь скачивание для набора строк (1 или много) — НЕ блокирует.

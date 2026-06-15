@@ -2,9 +2,12 @@
 треков и добивания. Аутентификация — токен в заголовке (Bearer / X-Auth-Token).
 Токен НИКОГДА не передаётся в URL/query."""
 import hmac
+import json
 import os
 import re
 import shutil
+import subprocess
+import sys
 import uuid
 from typing import Optional
 
@@ -126,6 +129,33 @@ def api_delete_playlist(body: PlaylistRef):
 @app.get("/api/errors", dependencies=[Depends(require_auth)])
 def api_list_errors():
     return {"groups": errors_parser.list_errors()}
+
+
+_NAME_CACHE: dict = {}
+
+
+class ResolveNamesIn(BaseModel):
+    urls: list[str]
+
+
+@app.post("/api/resolve-names", dependencies=[Depends(require_auth)])
+def api_resolve_names(body: ResolveNamesIn):
+    """Дорезолвить настоящие имена треков со Spotify (для битых имён вроде
+    'musicShelfRenderer'). Результат кешируется, резолв — в подпроцессе."""
+    todo = [u for u in body.urls if u and u not in _NAME_CACHE][:60]
+    if todo:
+        try:
+            r = subprocess.run([sys.executable, "-m", "app.resolve_names", *todo],
+                               cwd="/app", capture_output=True, text=True, timeout=90)
+            # берём последнюю непустую строку stdout (json), чтобы случайный вывод
+            # при импорте spotdl не сломал разбор
+            lines = [ln for ln in (r.stdout or "").splitlines() if ln.strip()]
+            data = json.loads(lines[-1]) if lines else {}
+            if isinstance(data, dict):
+                _NAME_CACHE.update(data)
+        except Exception:  # noqa: BLE001
+            pass
+    return {u: _NAME_CACHE[u] for u in body.urls if _NAME_CACHE.get(u)}
 
 
 # ------------------------------------------------------------------ задачи
