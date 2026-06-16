@@ -339,6 +339,7 @@ tr:hover td { background: color-mix(in srgb, var(--fill) 55%, transparent); }
 .taskrow:hover { background: var(--fill); }
 .taskrow .tname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .taskrow.sel { background: var(--fill-strong); }
+.taskrow.group .tname { font-weight: 600; }   /* строка-агрегат плейлиста (прогресс X/Y) */
 #tasklog {
   max-height: 280px; overflow-y: auto; padding: 11px 13px; margin: 0;
   border-top: .5px solid var(--border);
@@ -373,6 +374,13 @@ tr.row-done { opacity: .45; }
 }
 .banner strong { color: color-mix(in srgb, var(--warn) 65%, var(--fg)); }
 .banner ul { margin: 6px 0 0; padding-left: 18px; }
+
+/* ---------------------------------------------------------------- вкладка «Задачи» */
+/* скролл по вертикали при большой очереди + липкая кликабельная шапка для сортировки */
+#view-jobs .card { max-height: calc(100vh - 200px); overflow-y: auto; }
+#jobs-table thead th { position: sticky; top: 0; background: var(--bg2); z-index: 1; }
+#jobs-table thead th[data-sort] { cursor: pointer; user-select: none; white-space: nowrap; }
+#jobs-table thead th[data-sort]:hover { color: var(--fg); }
 
 /* ---------------------------------------------------------------- плейлисты */
 #pl-table td { vertical-align: middle; }

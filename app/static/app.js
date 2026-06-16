@@ -102,6 +102,13 @@ async function loadStatus() {
 
 function esc(s) { const d = document.createElement("div"); d.textContent = s == null ? "" : s; return d.innerHTML; }
 
+// единый русский статус задачи (и для вкладки, и для панели справа снизу)
+const STATUS_RU = { running: "идёт", done: "готово", error: "ошибка", cancelled: "отменено" };
+function statusRu(status, queuePos) {
+  if (status === "queued") return queuePos ? `в очереди #${queuePos}` : "в очереди";
+  return STATUS_RU[status] || status;
+}
+
 // допустимые источники аудио для добивания (Spotify-URL сюда НЕ годится)
 function validateSource(url) {
   const u = url.trim().toLowerCase();
@@ -500,24 +507,60 @@ document.getElementById("pl-modal-save").addEventListener("click", async () => {
 });
 
 // ------------------------------------------------------------------ вкладка «Задачи»
+// вкладка «Задачи»: тянем БОЛЬШЕ задач (видеть всю очередь), скролл + клиентская сортировка.
+let JOBS_CACHE = [];
+let JOBS_SORT = { col: null, dir: 1 };           // col: title|kind|status; dir: 1/-1
+const STATUS_RANK = { running: 0, queued: 1, done: 2, cancelled: 3, error: 4 };
+function _jobSortKey(j, col) {
+  if (col === "status") return [STATUS_RANK[j.status] != null ? STATUS_RANK[j.status] : 9, j.queue_pos || 0];
+  if (col === "kind") return [(j.kind || "").toLowerCase()];
+  return [(j.title || "").toLowerCase()];
+}
+function renderJobsTable() {
+  const tb = document.querySelector("#jobs-table tbody");
+  tb.innerHTML = "";
+  let rows = JOBS_CACHE.slice();
+  if (JOBS_SORT.col) {
+    rows.sort((a, b) => {
+      const ka = _jobSortKey(a, JOBS_SORT.col), kb = _jobSortKey(b, JOBS_SORT.col);
+      for (let i = 0; i < Math.max(ka.length, kb.length); i++) {
+        if (ka[i] < kb[i]) return -JOBS_SORT.dir;
+        if (ka[i] > kb[i]) return JOBS_SORT.dir;
+      }
+      return 0;
+    });
+  }
+  rows.forEach(j => {
+    const viewBtn = el("button", { class: "btn secondary small" }, ["Лог"]);
+    viewBtn.addEventListener("click", () => selectTask(j.id, j.title));
+    tb.appendChild(el("tr", {}, [
+      el("td", {}, [j.title]),
+      el("td", {}, [j.kind]),
+      el("td", {}, [el("span", { class: "status " + j.status }, [statusRu(j.status, j.queue_pos)])]),
+      el("td", {}, [viewBtn]),
+    ]));
+  });
+}
 async function loadJobs() {
   try {
-    const data = await api("GET", "/api/jobs");
-    const tb = document.querySelector("#jobs-table tbody");
-    tb.innerHTML = "";
-    (data.jobs || []).forEach(j => {
-      const viewBtn = el("button", { class: "btn secondary small" }, ["Лог"]);
-      viewBtn.addEventListener("click", () => selectTask(j.id, j.title));
-      tb.appendChild(el("tr", {}, [
-        el("td", {}, [j.title]),
-        el("td", {}, [j.kind]),
-        el("td", {}, [el("span", { class: "status " + j.status }, [j.status])]),
-        el("td", {}, [viewBtn]),
-      ]));
-    });
+    const data = await api("GET", "/api/jobs?limit=500");
+    JOBS_CACHE = data.jobs || [];
+    renderJobsTable();
   } catch (e) { toast("Ошибка: " + e.message); }
 }
 document.getElementById("jobs-reload").addEventListener("click", loadJobs);
+// клик по заголовку колонки — сортировка (повторный клик меняет направление)
+document.querySelectorAll("#jobs-table thead th[data-sort]").forEach(th => {
+  if (!th.dataset.label) th.dataset.label = th.textContent;   // запоминаем базовую подпись
+  th.addEventListener("click", () => {
+    const col = th.dataset.sort;
+    if (JOBS_SORT.col === col) JOBS_SORT.dir *= -1; else { JOBS_SORT.col = col; JOBS_SORT.dir = 1; }
+    document.querySelectorAll("#jobs-table thead th[data-sort]").forEach(h => {
+      h.textContent = h.dataset.label + (h.dataset.sort === JOBS_SORT.col ? (JOBS_SORT.dir > 0 ? " ↑" : " ↓") : "");
+    });
+    renderJobsTable();
+  });
+});
 
 // ------------------------------------------------------------------ апгрейд 320k
 let UPG_TIMER = null;
@@ -673,19 +716,30 @@ async function removeJob(jobId) {
     pollTasks();
   } catch (e) { toast("Не удалить: " + e.message); }
 }
+// отмена/удаление всей группы (пакетной загрузки плейлиста) одной кнопкой
+async function cancelGroup(title) {
+  try { await api("POST", "/api/jobs-group/cancel", { title }); pollTasks(); }
+  catch (e) { toast("Не отменить: " + e.message); }
+}
+async function removeGroup(title) {
+  try { await api("POST", "/api/jobs-group/remove", { title }); pollTasks(); }
+  catch (e) { toast("Не удалить: " + e.message); }
+}
 
 async function pollTasks() {
   clearTimeout(TASK_POLL_TIMER);
   let jobs = [];
+  let groups = [];
+  let activeTotal = 0;
   try {
     const data = await api("GET", "/api/jobs");
     jobs = data.jobs || [];
+    groups = data.groups || [];
+    activeTotal = data.active || 0;   // реальное число активных по всему реестру
   } catch (e) { /* молча, повторим */ }
 
   // обновляем строки ненайденных по статусу их задач скачивания/заливки
-  let active = 0;
   jobs.forEach(j => {
-    if (j.status === "queued" || j.status === "running") active++;
     const row = PENDING.get(j.id);
     if (!row) return;
     if (j.status === "running") {
@@ -705,10 +759,19 @@ async function pollTasks() {
     }
   });
 
-  renderTaskList(jobs);
+  // отображение: агрегаты групп (пакетные загрузки) + одиночные задачи, чьи заголовки
+  // НЕ вошли в группу. Так панель показывает 1 строку на плейлист с прогрессом X/Y,
+  // а не кучу одинаковых. Синхронизация строк «Ненайденных» выше — по индивидуальным.
+  const groupTitles = new Set(groups.map(g => g.title));
+  const singles = jobs.filter(j => !groupTitles.has(j.title));
+  const display = groups.concat(singles);
+  const isActive = e => e.group ? (e.running > 0 || e.queued > 0) : (e.status === "running" || e.status === "queued");
+  const isRunning = e => e.group ? e.running > 0 : e.status === "running";
+  display.sort((a, b) => (isActive(b) - isActive(a)) || (isRunning(b) - isRunning(a)));
+  renderTaskList(display, activeTotal);
   if (SEL_JOB) refreshSelectedLog();
 
-  const delay = (active > 0 || PENDING.size > 0) ? 1500 : 4000;
+  const delay = (activeTotal > 0 || PENDING.size > 0) ? 1500 : 4000;
   TASK_POLL_TIMER = setTimeout(pollTasks, delay);
 }
 
@@ -717,38 +780,63 @@ async function pollTasks() {
 const TASK_NODES = new Map();  // id -> {row, statusEl, actBtn, job}
 
 function _statusText(j) {
-  return (j.status === "queued" && j.queue_pos) ? `в очереди #${j.queue_pos}` : j.status;
+  return statusRu(j.status, j.queue_pos);
 }
+// текст и подсказка для агрегата группы (прогресс X/Y)
+function _groupBadge(j) {
+  const txt = `${j.done}/${j.total}` + (j.failed ? ` ⚠${j.failed}` : "");
+  let tip = `готово ${j.done} из ${j.total}`;
+  if (j.running) tip += ` · идёт ${j.running}`;
+  if (j.queued) tip += ` · в очереди ${j.queued}`;
+  if (j.failed) tip += ` · ошибок ${j.failed}`;
+  if (j.cancelled) tip += ` · отменено ${j.cancelled}`;
+  return { txt, tip };
+}
+// id для лога/выделения: у группы — текущий бегущий участник, у задачи — она сама
+function _logId(j) { return j.group ? j.current_id : j.id; }
+
 function _makeTaskNode(j) {
-  const statusEl = el("span", { class: "status " + j.status }, [_statusText(j)]);
-  const copyBtn = el("button", { class: "tact copy", title: "Копировать весь лог" }, ["📋"]);
+  const statusEl = el("span", { class: "status " + j.status }, [""]);
+  const copyBtn = el("button", { class: "tact copy", title: "Копировать лог" }, ["📋"]);
   const actBtn = el("button", { class: "tact" }, [""]);
-  const row = el("div", { class: "taskrow" }, [
+  const row = el("div", { class: "taskrow" + (j.group ? " group" : "") }, [
     el("span", { class: "tname" }, [j.title]),
     statusEl, copyBtn, actBtn,
   ]);
-  const node = { row, statusEl, actBtn, job: j };
-  copyBtn.addEventListener("click", (ev) => { ev.stopPropagation(); copyJobLog(node.job.id); });
+  const node = { row, statusEl, copyBtn, actBtn, job: j };
+  copyBtn.addEventListener("click", (ev) => { ev.stopPropagation(); const id = _logId(node.job); if (id) copyJobLog(id); });
   actBtn.addEventListener("click", (ev) => {
     ev.stopPropagation();
-    const st = node.job.status;
-    if (st === "queued" || st === "running") cancelJob(node.job.id); else removeJob(node.job.id);
+    const cur = node.job;
+    const active = cur.status === "queued" || cur.status === "running";
+    if (cur.group) { if (active) cancelGroup(cur.title); else removeGroup(cur.title); }
+    else { if (active) cancelJob(cur.id); else removeJob(cur.id); }
   });
-  row.addEventListener("click", () => selectTask(j.id));
+  row.addEventListener("click", () => { const id = _logId(node.job); if (id) selectTask(id); });
+  _updateTaskNode(node, j);
   return node;
 }
 function _updateTaskNode(node, j) {
   node.job = j;
   node.statusEl.className = "status " + j.status;
-  node.statusEl.textContent = _statusText(j);
+  if (j.group) {
+    const b = _groupBadge(j);
+    node.statusEl.textContent = b.txt;
+    node.statusEl.title = b.tip;
+    node.copyBtn.style.display = j.current_id ? "" : "none";
+  } else {
+    node.statusEl.textContent = _statusText(j);
+    node.statusEl.title = "";
+    node.copyBtn.style.display = "";
+  }
   const active = j.status === "queued" || j.status === "running";
   node.actBtn.className = "tact " + (active ? "cancel" : "remove");
   node.actBtn.textContent = active ? "✕" : "🗑";
-  node.actBtn.title = active ? "Отменить" : "Убрать из списка";
-  node.row.classList.toggle("sel", SEL_JOB === j.id);
+  node.actBtn.title = active ? (j.group ? "Отменить всю группу" : "Отменить") : "Убрать из списка";
+  node.row.classList.toggle("sel", !!_logId(j) && SEL_JOB === _logId(j));
 }
 
-function renderTaskList(jobs) {
+function renderTaskList(jobs, activeTotal) {
   const panel = document.getElementById("taskspanel");
   const list = document.getElementById("taskslist");
 
@@ -761,7 +849,7 @@ function renderTaskList(jobs) {
   }
   panel.classList.add("visible");
 
-  const recent = jobs.slice(0, 12);
+  const recent = jobs.slice(0, 50);   // панель скроллится; активные всегда сверху (сортировка с бэка)
   const want = new Set(recent.map(j => j.id));
   // удалить пропавшие
   for (const [id, n] of [...TASK_NODES]) {
@@ -785,8 +873,13 @@ function renderTaskList(jobs) {
   }
 
   // инлайн-лог под выбранной строкой — двигаем ТОЛЬКО если он не на месте
-  // (иначе перенос узла сбрасывал бы выделение/прокрутку при каждом поллинге)
-  const sel = SEL_JOB ? TASK_NODES.get(SEL_JOB) : null;
+  // (иначе перенос узла сбрасывал бы выделение/прокрутку при каждом поллинге).
+  // SEL_JOB — id РЕАЛЬНОЙ задачи; для группы её строка имеет id "grp:…", поэтому
+  // ищем узел по _logId (у группы это текущий бегущий участник).
+  let sel = SEL_JOB ? TASK_NODES.get(SEL_JOB) : null;
+  if (!sel && SEL_JOB) {
+    for (const [, n] of TASK_NODES) { if (_logId(n.job) === SEL_JOB) { sel = n; break; } }
+  }
   if (sel && !panel.classList.contains("collapsed")) {
     if (sel.row.nextSibling !== LOG_EL) sel.row.insertAdjacentElement("afterend", LOG_EL);
     LOG_EL.style.display = "block";
@@ -794,7 +887,7 @@ function renderTaskList(jobs) {
     LOG_EL.remove(); LOG_EL.style.display = "none";
   }
 
-  const active = jobs.filter(j => j.status === "queued" || j.status === "running").length;
+  const active = activeTotal || 0;
   document.getElementById("tasks-summary").textContent = active ? `активно: ${active}` : "";
 }
 

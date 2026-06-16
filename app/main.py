@@ -261,8 +261,18 @@ async def api_upload(
 
 
 @app.get("/api/jobs", dependencies=[Depends(require_auth)])
-def api_jobs():
-    return {"jobs": jobs.list_jobs()}
+def api_jobs(limit: int = 50):
+    # limit: панель опрашивает с дефолтом (50, ей хватает — активные всегда сверху),
+    # вкладка «Задачи» запрашивает больше (видеть всю очередь). active — реальное
+    # число активных по ВСЕМУ реестру (а не только в окне выдачи), для счётчика в UI.
+    lim = max(1, min(limit, 1000))
+    # jobs — индивидуальные задачи (для синхронизации строк «Ненайденных» и вкладки);
+    # groups — агрегаты пакетных загрузок (плейлист целиком) с прогрессом X/Y для панели.
+    return {
+        "jobs": jobs.list_jobs(lim),
+        "active": jobs.active_count(),
+        "groups": jobs.job_groups(),
+    }
 
 
 @app.post("/api/jobs/{job_id}/cancel", dependencies=[Depends(require_auth)])
@@ -277,6 +287,20 @@ def api_remove_job(job_id: str):
     if not jobs.remove_job(job_id):
         raise HTTPException(status_code=409, detail="Нельзя удалить активную задачу — сначала отмените")
     return {"ok": True}
+
+
+class GroupRef(BaseModel):
+    title: str
+
+
+@app.post("/api/jobs-group/cancel", dependencies=[Depends(require_auth)])
+def api_cancel_group(body: GroupRef):
+    return {"ok": True, "cancelled": jobs.cancel_group(body.title)}
+
+
+@app.post("/api/jobs-group/remove", dependencies=[Depends(require_auth)])
+def api_remove_group(body: GroupRef):
+    return {"ok": True, "removed": jobs.remove_group(body.title)}
 
 
 @app.get("/api/status", dependencies=[Depends(require_auth)])

@@ -608,6 +608,73 @@ def get_job(job_id: str) -> Optional[Job]:
         return _jobs.get(job_id)
 
 
+def active_count() -> int:
+    """Сколько задач реально активно (queued+running) по ВСЕМУ реестру —
+    для счётчика в UI (выдача list_jobs ограничена лимитом и занижала бы число)."""
+    with _jobs_lock:
+        return sum(1 for j in _jobs.values() if j.status in ("queued", "running"))
+
+
+def job_groups() -> List[dict]:
+    """Агрегаты по заголовку для МНОГОэлементных групп (пакетная загрузка плейлиста):
+    одна запись с прогрессом X/Y вместо кучи одинаковых строк. Считается по ВСЕМУ
+    реестру (точные счётчики). Одиночные задачи (1 элемент) сюда НЕ попадают — они
+    остаются обычными задачами в list_jobs. Сортировка — активные группы сверху."""
+    with _jobs_lock:
+        by_title: Dict[str, List[Job]] = {}
+        for jid in _jobs_order:
+            j = _jobs[jid]
+            by_title.setdefault(j.title, []).append(j)
+        groups: List[dict] = []
+        for title, members in by_title.items():
+            if len(members) < 2:
+                continue
+            cnt = {"queued": 0, "running": 0, "done": 0, "error": 0, "cancelled": 0}
+            for m in members:
+                cnt[m.status] = cnt.get(m.status, 0) + 1
+            running, queued = cnt["running"], cnt["queued"]
+            done, failed, cancelled = cnt["done"], cnt["error"], cnt["cancelled"]
+            cur = next((m for m in members if m.status == "running"), None)
+            if running or queued:
+                status = "running" if running else "queued"
+            elif failed and not done:
+                status = "error"
+            else:
+                status = "done"
+            groups.append({
+                "group": True, "id": "grp:" + title, "title": title,
+                "kind": members[0].kind, "status": status,
+                "total": len(members), "done": done, "failed": failed,
+                "cancelled": cancelled, "queued": queued, "running": running,
+                "processed": done + failed + cancelled,
+                "current_id": cur.id if cur else None,
+                "created": min(m.created for m in members),
+                "finished": max((m.finished or 0.0) for m in members) or None,
+            })
+    groups.sort(key=lambda g: (
+        0 if (g["running"] or g["queued"]) else 1,
+        0 if g["running"] else 1,
+        g["created"] if (g["running"] or g["queued"]) else -(g["finished"] or 0.0),
+    ))
+    return groups
+
+
+def cancel_group(title: str) -> int:
+    """Отменить все активные задачи группы (одного заголовка). Возвращает число отменённых."""
+    with _jobs_lock:
+        ids = [j.id for j in _jobs.values()
+               if j.title == title and j.status in ("queued", "running")]
+    return sum(1 for jid in ids if cancel_job(jid))
+
+
+def remove_group(title: str) -> int:
+    """Убрать все ЗАВЕРШЁННЫЕ задачи группы из списка. Возвращает число убранных."""
+    with _jobs_lock:
+        ids = [j.id for j in _jobs.values()
+               if j.title == title and j.status in ("done", "error", "cancelled")]
+    return sum(1 for jid in ids if remove_job(jid))
+
+
 def remove_job(job_id: str) -> bool:
     """Убрать ЗАВЕРШЁННУЮ задачу из списка (done/error/cancelled). Активные
     (queued/running) удалять нельзя — их сначала надо отменить."""
