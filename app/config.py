@@ -84,6 +84,13 @@ UPGRADE_MIN_BITRATE = _int_env("UPGRADE_MIN_BITRATE", 300)
 # Лимит апгрейд-загрузок в сутки (анти-бан). 0 = без лимита (real-time и так медленно).
 UPGRADE_PER_DAY = _int_env("UPGRADE_PER_DAY", 0)
 
+# Таймаут (сек) на ОДИН подпроцесс-скачивание трека (Deezer/Spotify/YouTube/заливка).
+# Сторож убивает зависший процесс (напр. оборванную librespot-сессию посреди стрима),
+# чтобы он не заморозил всю очередь. ВАЖНО: real-time-загрузка идёт со скоростью
+# прослушивания и МОЛЧИТ весь трек, поэтому таймаут — щедрый потолок (час), иначе
+# длинный честный трек (микс/сет/классика) убьётся как «зависший». 0 = без таймаута.
+DOWNLOAD_TRACK_TIMEOUT = _int_env("DOWNLOAD_TRACK_TIMEOUT", 3600)
+
 
 def zotify_configured() -> bool:
     if os.path.exists(ZOTIFY_CREDENTIALS_FILE):

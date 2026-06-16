@@ -15,6 +15,7 @@
 import os
 import queue
 import random
+import signal
 import subprocess
 import sys
 import threading
@@ -178,9 +179,56 @@ def looks_failed(lines: List[str]) -> bool:
     return any(any(m in ln for m in _FAIL_MARKERS) for ln in lines)
 
 
-def _run_process(job: Job, cmd: List[str], cwd: str = "/"):
+def _terminate_proc(proc) -> None:
+    """Остановить подпроцесс И ВСЕХ его потомков (грандчайлдов ffmpeg/librespot):
+    мягко (SIGTERM группе), через 5с — жёстко (SIGKILL группе). Иначе живой
+    грандчайлд держит stdout-пайп открытым и цикл чтения в _run_process не получит
+    EOF → очередь так и останется замороженной. На POSIX используем группу
+    процессов (Popen(..., start_new_session=True)); на Windows (только локальные
+    тесты) — одиночный terminate/kill, групп там нет."""
+    posix = hasattr(os, "killpg")
+
+    def _kill_group(sig) -> bool:
+        try:
+            os.killpg(os.getpgid(proc.pid), sig)
+            return True
+        except Exception:  # noqa: BLE001 — процесс уже мёртв / нет прав
+            return False
+
+    if posix:
+        _kill_group(signal.SIGTERM)
+    else:
+        try:
+            proc.terminate()
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        proc.wait(timeout=5)
+        return
+    except Exception:  # noqa: BLE001 — TimeoutExpired или уже мёртв
+        pass
+    if posix:
+        _kill_group(signal.SIGKILL)
+    else:
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _run_process(job: Job, cmd: List[str], cwd: str = "/",
+                 timeout: Optional[float] = None, kill_on_cancel: bool = True):
     """Запускает процесс, построчно пишет stdout/stderr в лог задачи И в stdout
-    контейнера (видно в `docker logs`). Возвращает (код_возврата, строки_вывода)."""
+    контейнера (видно в `docker logs`). Возвращает (код_возврата, строки_вывода).
+
+    Сторож-поток убивает подпроцесс (и всю его группу), если:
+      • он висит дольше `timeout` сек (зависшая librespot-сессия и т.п.), или
+      • задачу отменили И kill_on_cancel=True.
+    Без этого зависший подпроцесс заморозил бы чтение stdout → всю очередь.
+
+    kill_on_cancel=False (sync): отмену НЕ форсируем убийством — текущий spotdl
+    доработает и запишет m3u/save-file целиком, а sync-all остановится между
+    плейлистами (мягко, без риска порчи файлов)."""
     job.append("$ " + " ".join(cmd))
     env = dict(os.environ)
     env.setdefault("PYTHONUNBUFFERED", "1")
@@ -194,11 +242,34 @@ def _run_process(job: Job, cmd: List[str], cwd: str = "/"):
             bufsize=1,
             env=env,
             cwd=cwd,
+            start_new_session=True,   # своя группа процессов → можно убить ВСЕХ потомков
         )
     except FileNotFoundError:
         job.append(f"[error] не найден исполняемый файл: {cmd[0]}")
         job.returncode = 127
         return 127, out_lines
+
+    deadline = (time.time() + timeout) if timeout else None
+    watch = {"reason": None}
+
+    def _watchdog() -> None:
+        # пока процесс жив — следим за отменой/дедлайном; убиваем группу при нужде.
+        # Убийство закрывает stdout → блокирующий цикл чтения ниже получит EOF.
+        while proc.poll() is None:
+            if kill_on_cancel and job.cancelled:
+                watch["reason"] = "cancelled"
+                _terminate_proc(proc)
+                return
+            if deadline is not None and time.time() > deadline:
+                watch["reason"] = "timeout"
+                _terminate_proc(proc)
+                return
+            time.sleep(1.0)
+
+    # сторож нужен только если есть что сторожить (таймаут или жёсткая отмена)
+    if deadline is not None or kill_on_cancel:
+        threading.Thread(target=_watchdog, name=f"wd-{job.id}", daemon=True).start()
+
     assert proc.stdout is not None
     for line in proc.stdout:
         line = line.rstrip("\n")
@@ -206,16 +277,28 @@ def _run_process(job: Job, cmd: List[str], cwd: str = "/"):
         job.append(line)
         print(f"[{job.id}] {line}", flush=True)  # дублируем в docker logs
     proc.wait()
+
+    if watch["reason"] == "timeout":
+        job.append(f"[timeout] подпроцесс висел дольше {int(timeout)}с — убит; "
+                   f"очередь продолжает работу")
+    elif watch["reason"] == "cancelled":
+        job.append("[cancelled] подпроцесс остановлен")
     job.returncode = proc.returncode
     job.append(f"[exit] код возврата: {proc.returncode}")
     return proc.returncode, out_lines
 
 
-def run_spotdl(job: Job, args: List[str]):
+def run_spotdl(job: Job, args: List[str], timeout: Optional[float] = None,
+               kill_on_cancel: bool = True):
     """Запуск spotdl с cwd=/ — критично: spotdl 4.5.0 прогоняет части пути --m3u
     через sanitize, который вырезает '/', превращая абсолютный путь в
-    относительный. Из cwd=/ он резолвится обратно в /music/... (как автосинк)."""
-    return _run_process(job, [config.SPOTDL_BIN] + args, cwd="/")
+    относительный. Из cwd=/ он резолвится обратно в /music/... (как автосинк).
+
+    timeout задаём для одиночного скачивания трека (YouTube); для sync — None
+    (синк целого плейлиста легитимно долгий) + kill_on_cancel=False (мягкая отмена,
+    чтобы не оборвать запись m3u/save-file)."""
+    return _run_process(job, [config.SPOTDL_BIN] + args, cwd="/",
+                        timeout=timeout, kill_on_cancel=kill_on_cancel)
 
 
 def _common_output_args() -> List[str]:
@@ -261,7 +344,9 @@ def _sync_locked(job: Job, pl: playlists.Playlist) -> None:
     """Sync плейлиста под локом со сбросом errors-файла (защита от дублей)."""
     with PlaylistLock(pl.id, job):
         _reset_errors_file(pl.safe)
-        run_spotdl(job, sync_args(pl))
+        # мягкая отмена: текущий spotdl допишет m3u/save-file, sync-all встанет
+        # между плейлистами (а не порвёт файлы на полузаписи).
+        run_spotdl(job, sync_args(pl), kill_on_cancel=False)
 
 
 def _run_sync_playlist(job: Job, pl: playlists.Playlist) -> None:
@@ -289,7 +374,8 @@ def _download_track(job: Job, spotify_url: str, youtube_url: str, safe: str) -> 
     При успехе убирает трек из errors-файла. Возвращает True при успехе.
     НЕ запускает sync — обновление m3u делается отдельной задачей (одной на
     плейлист), чтобы пакетная загрузка не плодила лишние синки."""
-    rc, out = run_spotdl(job, download_match_args(youtube_url, spotify_url))
+    rc, out = run_spotdl(job, download_match_args(youtube_url, spotify_url),
+                         timeout=config.DOWNLOAD_TRACK_TIMEOUT)
     if rc != 0 or looks_failed(out):
         job.status = "error"
         job.append("[error] загрузка не удалась — трек оставлен в списке ненайденных")
@@ -317,7 +403,8 @@ def _run_deezer(job: Job, spotify_url: str, safe: str) -> None:
     """Скачать трек с Deezer по ISRC (точное совпадение со Spotify) и положить в
     библиотеку. Для треков, которых нет на YouTube."""
     job.append("=== попытка скачать с Deezer (по ISRC) ===")
-    rc, out = _run_process(job, deezer_dl_args(spotify_url, safe), cwd="/app")
+    rc, out = _run_process(job, deezer_dl_args(spotify_url, safe), cwd="/app",
+                           timeout=config.DOWNLOAD_TRACK_TIMEOUT)
     ok = rc == 0 and any(line.startswith("OK ") for line in out)
     if not ok:
         job.status = "error"
@@ -364,7 +451,8 @@ def _run_zotify(job: Job, spotify_url: str, safe: str, force_realtime: bool = Fa
     from . import settings
     realtime = force_realtime or settings.get_safe_mode()
     job.append(f"=== Spotify (librespot): скачивание{' [real-time]' if realtime else ''} ===")
-    rc, out = _run_process(job, spotify_dl_args(spotify_url, safe, realtime), cwd="/app")
+    rc, out = _run_process(job, spotify_dl_args(spotify_url, safe, realtime), cwd="/app",
+                           timeout=config.DOWNLOAD_TRACK_TIMEOUT)
     ok = rc == 0 and any(line.startswith("OK ") for line in out)
     if not ok:
         job.status = "error"
@@ -393,7 +481,8 @@ def _run_upload(job: Job, temp_path: str, spotify_url: str, safe: str, orig_name
     обложка со Spotify, размещение по тому же шаблону пути, что и обычная загрузка.
     То же, что spotdl делает после скачивания аудио — только источник локальный."""
     job.append(f"=== заливка локального файла: {orig_name} ===")
-    rc, out = _run_process(job, place_localfile_args(temp_path, spotify_url, safe), cwd="/app")
+    rc, out = _run_process(job, place_localfile_args(temp_path, spotify_url, safe), cwd="/app",
+                           timeout=config.DOWNLOAD_TRACK_TIMEOUT)
     try:
         os.remove(temp_path)
     except OSError:
@@ -537,9 +626,13 @@ def remove_job(job_id: str) -> bool:
 
 
 def cancel_job(job_id: str) -> bool:
-    """Отменить задачу. Для queued — снимется до запуска (воркер пропустит).
-    Для running — мягкий запрос: длинные циклы (sync-всех) прервутся между
-    плейлистами, но текущий шаг spotdl доработает."""
+    """Отменить задачу. Только выставляем флаг (мгновенно, не блокируя запрос):
+      • queued — воркер пропустит её при старте;
+      • running per-track скачивание — сторож в _run_process убьёт подпроцесс и
+        всю его группу в течение ~1с;
+      • running sync — мягко: текущий spotdl допишет файлы, sync-all встанет
+        между плейлистами.
+    Файлы уже скачанных треков остаются; недокачанный — в «ненайденных»."""
     with _jobs_lock:
         job = _jobs.get(job_id)
         if job is None:
