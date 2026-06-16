@@ -659,7 +659,16 @@ def list_jobs(limit: int = 50) -> List[dict]:
                 pos[jid] = ahead[j.lane]
             elif j.status == "running":
                 ahead[j.lane] += 1
-        ids = order[-limit:][::-1]
+        # Порядок выдачи: running → недавно завершённые (новые первыми) → голова
+        # очереди. КРИТИЧНО при большой очереди: бегущая задача обычно в НАЧАЛЕ
+        # order (низкий id), а прежний `order[-limit:]` отдавал ХВОСТ (новейшие
+        # queued) и вытеснял её — в UI всё выглядело как «в очереди», ни одной
+        # «идёт», и завершённые треки из начала не убирались.
+        running = [jid for jid in order if _jobs[jid].status == "running"]
+        finished = [jid for jid in reversed(order)
+                    if _jobs[jid].status in ("done", "error", "cancelled")]
+        queued = [jid for jid in order if _jobs[jid].status == "queued"]
+        ids = (running + finished + queued)[:limit]
         out = []
         for i in ids:
             d = _jobs[i].to_dict()
