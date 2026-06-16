@@ -63,11 +63,13 @@ _LANE_BY_KIND = {
 
 
 class Job:
-    def __init__(self, kind: str, title: str, runner: Callable[["Job"], None]):
+    def __init__(self, kind: str, title: str, runner: Callable[["Job"], None],
+                 name: str = ""):
         self.id = _next_id()
         self.kind = kind            # download | sync | sync-all | autosync | retry
         self.lane = _LANE_BY_KIND.get(kind, LANE_INTERACTIVE)
-        self.title = title
+        self.title = title          # полный заголовок (по нему группируем)
+        self.name = name or title   # чистое имя плейлиста (без метода) для UI
         self.runner = runner
         self.status = "queued"      # queued | running | done | error
         self.log: List[str] = []
@@ -98,6 +100,7 @@ class Job:
                 "kind": self.kind,
                 "lane": self.lane,
                 "title": self.title,
+                "name": self.name,
                 "status": self.status,
                 "created": self.created,
                 "started": self.started,
@@ -525,7 +528,7 @@ def enqueue_sync_playlist(url: str) -> Job:
     if pl is None:
         raise ValueError("Плейлист не найден")
     job = Job("sync", f"Синхронизация: {pl.name}",
-              lambda j: _run_sync_playlist(j, pl))
+              lambda j: _run_sync_playlist(j, pl), name=pl.name)
     return _enqueue(job)
 
 
@@ -548,31 +551,31 @@ def _has_pending_sync_all() -> bool:
 
 def enqueue_download_one(spotify_url: str, youtube_url: str, safe: str) -> Job:
     job = Job("download", f"Скачивание трека ({safe})",
-              lambda j: _run_download_one(j, spotify_url, youtube_url, safe))
+              lambda j: _run_download_one(j, spotify_url, youtube_url, safe), name=safe)
     return _enqueue(job)
 
 
 def enqueue_deezer(spotify_url: str, safe: str) -> Job:
     job = Job("deezer", f"Deezer: {safe}",
-              lambda j: _run_deezer(j, spotify_url, safe))
+              lambda j: _run_deezer(j, spotify_url, safe), name=safe)
     return _enqueue(job)
 
 
 def enqueue_zotify(spotify_url: str, safe: str, force_realtime: bool = False) -> Job:
     job = Job("zotify", f"Spotify 320k: {safe}",
-              lambda j: _run_zotify(j, spotify_url, safe, force_realtime))
+              lambda j: _run_zotify(j, spotify_url, safe, force_realtime), name=safe)
     return _enqueue(job)
 
 
 def enqueue_upload(temp_path: str, spotify_url: str, safe: str, orig_name: str) -> Job:
     job = Job("upload", f"Заливка файла ({safe})",
-              lambda j: _run_upload(j, temp_path, spotify_url, safe, orig_name))
+              lambda j: _run_upload(j, temp_path, spotify_url, safe, orig_name), name=safe)
     return _enqueue(job)
 
 
 def enqueue_sync_for_m3u(safe: str) -> Job:
     job = Job("sync", f"Обновление m3u: {safe}",
-              lambda j: _run_sync_for_m3u(j, safe))
+              lambda j: _run_sync_for_m3u(j, safe), name=safe)
     return _enqueue(job)
 
 
@@ -643,7 +646,7 @@ def job_groups() -> List[dict]:
                 status = "done"
             groups.append({
                 "group": True, "id": "grp:" + title, "title": title,
-                "kind": members[0].kind, "status": status,
+                "name": members[0].name, "kind": members[0].kind, "status": status,
                 "total": len(members), "done": done, "failed": failed,
                 "cancelled": cancelled, "queued": queued, "running": running,
                 "processed": done + failed + cancelled,

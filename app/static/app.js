@@ -109,6 +109,25 @@ function statusRu(status, queuePos) {
   return STATUS_RU[status] || status;
 }
 
+// метод скачивания → цветной тег (как теги категорий на f95)
+const SOURCE = {
+  zotify:   { label: "Spotify 320k", cls: "src-zotify" },
+  deezer:   { label: "Deezer",       cls: "src-deezer" },
+  download: { label: "YouTube",      cls: "src-youtube" },
+  upload:   { label: "Файл",         cls: "src-upload" },
+  sync:     { label: "Синхрон",      cls: "src-sync" },
+};
+function _sourceTag(kind) {
+  const s = SOURCE[kind];
+  return s ? el("span", { class: "srctag " + s.cls }, [s.label]) : null;
+}
+function _taskName(j) { return j.name || j.title || ""; }
+// содержимое ячейки имени: [цветной тег метода] + имя плейлиста
+function _nameContent(j) {
+  const tag = _sourceTag(j.kind);
+  return tag ? [tag, _taskName(j)] : [_taskName(j)];
+}
+
 // допустимые источники аудио для добивания (Spotify-URL сюда НЕ годится)
 function validateSource(url) {
   const u = url.trim().toLowerCase();
@@ -509,12 +528,11 @@ document.getElementById("pl-modal-save").addEventListener("click", async () => {
 // ------------------------------------------------------------------ вкладка «Задачи»
 // вкладка «Задачи»: тянем БОЛЬШЕ задач (видеть всю очередь), скролл + клиентская сортировка.
 let JOBS_CACHE = [];
-let JOBS_SORT = { col: null, dir: 1 };           // col: title|kind|status; dir: 1/-1
+let JOBS_SORT = { col: null, dir: 1 };           // col: title|status; dir: 1/-1
 const STATUS_RANK = { running: 0, queued: 1, done: 2, cancelled: 3, error: 4 };
 function _jobSortKey(j, col) {
   if (col === "status") return [STATUS_RANK[j.status] != null ? STATUS_RANK[j.status] : 9, j.queue_pos || 0];
-  if (col === "kind") return [(j.kind || "").toLowerCase()];
-  return [(j.title || "").toLowerCase()];
+  return [_taskName(j).toLowerCase()];
 }
 function renderJobsTable() {
   const tb = document.querySelector("#jobs-table tbody");
@@ -532,19 +550,30 @@ function renderJobsTable() {
   }
   rows.forEach(j => {
     const viewBtn = el("button", { class: "btn secondary small" }, ["Лог"]);
-    viewBtn.addEventListener("click", () => selectTask(j.id, j.title));
-    tb.appendChild(el("tr", {}, [
-      el("td", {}, [j.title]),
-      el("td", {}, [j.kind]),
-      el("td", {}, [el("span", { class: "status " + j.status }, [statusRu(j.status, j.queue_pos)])]),
+    const logId = j.group ? j.current_id : j.id;
+    if (logId) viewBtn.addEventListener("click", () => selectTask(logId, j.title));
+    else viewBtn.disabled = true;
+    let statusCell;
+    if (j.group) {
+      const b = _groupBadge(j);
+      statusCell = el("span", { class: "status " + j.status, title: b.tip }, [b.txt]);
+    } else {
+      statusCell = el("span", { class: "status " + j.status }, [statusRu(j.status, j.queue_pos)]);
+    }
+    tb.appendChild(el("tr", { class: j.group ? "job-group" : "" }, [
+      el("td", {}, _nameContent(j)),
+      el("td", {}, [statusCell]),
       el("td", {}, [viewBtn]),
     ]));
   });
 }
 async function loadJobs() {
   try {
+    // как в панели: агрегаты групп (пакетные загрузки) + одиночные задачи вне групп
     const data = await api("GET", "/api/jobs?limit=500");
-    JOBS_CACHE = data.jobs || [];
+    const groups = data.groups || [];
+    const gTitles = new Set(groups.map(g => g.title));
+    JOBS_CACHE = groups.concat((data.jobs || []).filter(j => !gTitles.has(j.title)));
     renderJobsTable();
   } catch (e) { toast("Ошибка: " + e.message); }
 }
@@ -800,7 +829,7 @@ function _makeTaskNode(j) {
   const copyBtn = el("button", { class: "tact copy", title: "Копировать лог" }, ["📋"]);
   const actBtn = el("button", { class: "tact" }, [""]);
   const row = el("div", { class: "taskrow" + (j.group ? " group" : "") }, [
-    el("span", { class: "tname" }, [j.title]),
+    el("span", { class: "tname" }, _nameContent(j)),
     statusEl, copyBtn, actBtn,
   ]);
   const node = { row, statusEl, copyBtn, actBtn, job: j };

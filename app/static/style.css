@@ -340,6 +340,18 @@ tr:hover td { background: color-mix(in srgb, var(--fill) 55%, transparent); }
 .taskrow .tname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .taskrow.sel { background: var(--fill-strong); }
 .taskrow.group .tname { font-weight: 600; }   /* строка-агрегат плейлиста (прогресс X/Y) */
+
+/* цветной тег метода скачивания (как теги категорий на f95) */
+.srctag {
+  display: inline-block; vertical-align: middle; margin-right: 7px;
+  padding: 1px 7px; border-radius: 5px; font-size: 10.5px; font-weight: 700;
+  letter-spacing: .01em; white-space: nowrap; color: #fff;
+}
+.srctag.src-zotify  { background: #1db954; color: #06210f; }  /* Spotify — зелёный */
+.srctag.src-deezer  { background: #7b3ff2; }                  /* Deezer — фиолетовый */
+.srctag.src-youtube { background: #cc1a11; }                  /* YouTube — красный */
+.srctag.src-upload  { background: #2f6fed; }                  /* файл — синий */
+.srctag.src-sync    { background: #0c8f9e; }                  /* синхрон — бирюзовый */
 #tasklog {
   max-height: 280px; overflow-y: auto; padding: 11px 13px; margin: 0;
   border-top: .5px solid var(--border);
