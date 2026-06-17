@@ -372,11 +372,14 @@ def _run_sync_all(job: Job) -> None:
             job.append(f"[skip] {pl.name}: {e}")
 
 
+def m3u_append_args(spotify_url: str, safe: str) -> List[str]:
+    return [sys.executable, "-m", "app.append_m3u", spotify_url, safe]
+
+
 def _download_track(job: Job, spotify_url: str, youtube_url: str, safe: str) -> bool:
     """Скачивает один трек (аудио с youtube_url, мета со spotify_url).
-    При успехе убирает трек из errors-файла. Возвращает True при успехе.
-    НЕ запускает sync — обновление m3u делается отдельной задачей (одной на
-    плейлист), чтобы пакетная загрузка не плодила лишние синки."""
+    При успехе убирает трек из errors-файла и ЛЕГКО дописывает его в m3u (без
+    полного spotdl sync всего плейлиста). Возвращает True при успехе."""
     rc, out = run_spotdl(job, download_match_args(youtube_url, spotify_url),
                          timeout=config.DOWNLOAD_TRACK_TIMEOUT)
     if rc != 0 or looks_failed(out):
@@ -387,6 +390,9 @@ def _download_track(job: Job, spotify_url: str, youtube_url: str, safe: str) -> 
         job.append("[ok] трек скачан, убран из errors-файла")
     else:
         job.append("[ok] трек скачан (в errors-файле не найден — возможно, уже убран)")
+    # лёгкая дозапись ТОЛЬКО этого трека в m3u (вместо тяжёлого sync всего плейлиста)
+    if safe:
+        _run_process(job, m3u_append_args(spotify_url, safe), cwd="/app", timeout=180)
     return True
 
 
@@ -501,19 +507,6 @@ def _run_upload(job: Job, temp_path: str, spotify_url: str, safe: str, orig_name
         job.append("[ok] файл размещён (в errors-файле не найден — возможно, уже убран)")
 
 
-def _run_sync_for_m3u(job: Job, safe: str) -> None:
-    """Обновляет m3u плейлиста через sync (чтобы скачанные треки попали в Navidrome)."""
-    pl = playlists.find_by_safe(safe)
-    if pl is None:
-        job.append(f"[warn] плейлист для '{safe}' не найден в playlists.txt — m3u не обновлён")
-        return
-    job.append(f"=== sync '{pl.name}' для обновления m3u ===")
-    try:
-        _sync_locked(job, pl)
-    except TimeoutError as e:
-        job.append(f"[warn] не удалось взять лок для sync: {e}")
-
-
 # ------------------------------------------------------------------ публичное API
 def _enqueue(job: Job) -> Job:
     with _jobs_lock:
@@ -573,22 +566,16 @@ def enqueue_upload(temp_path: str, spotify_url: str, safe: str, orig_name: str) 
     return _enqueue(job)
 
 
-def enqueue_sync_for_m3u(safe: str) -> Job:
-    job = Job("sync", f"Обновление m3u: {safe}",
-              lambda j: _run_sync_for_m3u(j, safe), name=safe)
-    return _enqueue(job)
-
-
 def enqueue_download_batch(items: List[dict]) -> dict:
-    """Пакетная загрузка: на каждый трек — задача скачивания, затем ОДНА задача
-    sync на каждый затронутый плейлист (а не на каждый трек). Один воркер +
-    FIFO гарантируют, что sync пойдёт после всех загрузок этого плейлиста.
+    """Пакетная загрузка: на каждый трек — одна задача скачивания. m3u при этом
+    дозаписывается ЛЕГКО внутри самой задачи (только скачанный трек), без отдельного
+    тяжёлого `spotdl sync` всего плейлиста — раньше он сканировал сотни песен и
+    блокировал очередь.
 
     items: [{spotify_url, youtube_url, safe}]
-    Возвращает {downloads: [{id, spotify_url, safe}], syncs: [{id, safe}]}.
+    Возвращает {downloads: [{id, spotify_url, safe}], syncs: []}.
     """
     downloads = []
-    safes_order: List[str] = []
     for it in items:
         sp = (it.get("spotify_url") or "").strip()
         yt = (it.get("youtube_url") or "").strip()
@@ -597,13 +584,7 @@ def enqueue_download_batch(items: List[dict]) -> dict:
             continue
         job = enqueue_download_one(sp, yt, safe)
         downloads.append({"id": job.id, "spotify_url": sp, "safe": safe})
-        if safe and safe not in safes_order:
-            safes_order.append(safe)
-    syncs = []
-    for safe in safes_order:
-        job = enqueue_sync_for_m3u(safe)
-        syncs.append({"id": job.id, "safe": safe})
-    return {"downloads": downloads, "syncs": syncs}
+    return {"downloads": downloads, "syncs": []}
 
 
 def get_job(job_id: str) -> Optional[Job]:
