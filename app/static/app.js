@@ -605,7 +605,7 @@ async function loadUpgrade() {
   try { s = await api("GET", "/api/upgrade/status"); }
   catch (e) { document.getElementById("upg-progress").textContent = "Ошибка: " + e.message; return; }
   renderUpgrade(s);
-  if (["running", "stopping", "waiting"].includes(s.state) &&
+  if (["running", "stopping", "waiting"].includes(s.state) && !document.hidden &&
       document.getElementById("view-upgrade").classList.contains("active")) {
     UPG_TIMER = setTimeout(loadUpgrade, 2000);
   }
@@ -649,6 +649,7 @@ document.getElementById("syncall-btn").addEventListener("click", async () => {
 
 // ------------------------------------------------------------------ панель задач (справа снизу)
 let TASK_POLL_TIMER = null;
+let TASK_POLL_PAUSED = false;   // опрос остановлен, т.к. вкладка не видна
 let SEL_JOB = null;        // id задачи, чей лог открыт (инлайн под строкой)
 let SEL_LOG_OFFSET = 0;
 const LOG_EL = document.getElementById("tasklog");  // переносим под выбранную строку
@@ -757,6 +758,11 @@ async function removeGroup(title) {
 
 async function pollTasks() {
   clearTimeout(TASK_POLL_TIMER);
+  TASK_POLL_TIMER = null;
+  // Вкладка не видна — не опрашиваем совсем. Сервис почти всё время простаивает,
+  // а забытая открытая вкладка иначе будила бы бэкенд круглосуточно.
+  if (document.hidden) { TASK_POLL_PAUSED = true; return; }
+  TASK_POLL_PAUSED = false;
   let jobs = [];
   let groups = [];
   let activeTotal = 0;
@@ -800,9 +806,20 @@ async function pollTasks() {
   renderTaskList(display, activeTotal);
   if (SEL_JOB) refreshSelectedLog();
 
-  const delay = (activeTotal > 0 || PENDING.size > 0) ? 1500 : 4000;
+  // В простое опрашиваем редко: ничего не меняется, а бэкенд на каждый запрос
+  // проходит по реестру задач. Пока что-то идёт — прежние 1.5 с.
+  const delay = (activeTotal > 0 || PENDING.size > 0) ? 1500 : 15000;
   TASK_POLL_TIMER = setTimeout(pollTasks, delay);
 }
+
+// Вернулись на вкладку — сразу догоняем состояние (и возобновляем опрос).
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) return;
+  if (TASK_POLL_PAUSED) pollTasks();
+  // опрос апгрейда тоже вставал вместе со скрытой вкладкой — возобновляем
+  const upg = document.getElementById("view-upgrade");
+  if (upg && upg.classList.contains("active")) loadUpgrade();
+});
 
 // Инкрементальный рендер списка задач: НЕ пересоздаём DOM каждый поллинг, иначе
 // сбрасывается выделение текста в открытом логе. Обновляем строки на месте.

@@ -71,6 +71,12 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+# Сколько параллельных загрузок держит сам spotdl. По умолчанию у него 4, и на
+# каждую завершённую загрузку запускается ffmpeg — на слабом NAS это забивает
+# все ядра. 2 — компромисс: скорость почти та же (упор в сеть), CPU вдвое ниже.
+SPOTDL_THREADS = _int_env("SPOTDL_THREADS", 2)
+
+
 # Idle-пауза (сек) МЕЖДУ треками поверх real-time (как Zotify bulk_wait_time).
 # Применяется к апгрейду (всегда) и к массовой «Скачать все» (если безопасный режим).
 ZOTIFY_BULK_WAIT_MIN = _int_env("ZOTIFY_BULK_WAIT_MIN", 5)

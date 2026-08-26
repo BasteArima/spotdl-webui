@@ -189,6 +189,7 @@ docker run --rm -p 4535:8000 -e APP_AUTH_TOKEN=dev \
 | `MUSIC_DIR` | `/music` | Корень музыки. |
 | `OUTPUT_TEMPLATE` | `…/{album-artist}/{album}/{track-number} - {title}.{output-ext}` | Шаблон вывода spotdl (должен совпадать с автосинком). |
 | `AUDIO_FORMAT` | `mp3` | Формат загрузки. |
+| `SPOTDL_THREADS` | `2` | Сколько загрузок spotdl тянет параллельно. На каждую завершённую запускается ffmpeg, поэтому дефолтные для spotdl `4` забивают все ядра слабого NAS. Упор всё равно в сеть — разница по скорости невелика. |
 | `UPLOAD_BITRATE` | `320k` | Битрейт конвертации (заливка, Deezer, Spotify-апгрейд). 320k — максимум Spotify. `auto` — не форсировать. |
 | `DEEZER_ARL` | — | ARL-токен Deezer для фолбэка. Альтернатива — файл `/conf/deezer_arl.txt`. Без него кнопка Deezer вернёт 400. |
 | `ZOTIFY_CREDENTIALS_FILE` | `/conf/zotify_credentials.json` | Путь к credentials.json Zotify (создаётся при первом логине). |

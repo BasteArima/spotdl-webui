@@ -28,6 +28,13 @@ from . import config, errors_parser, playlists
 _jobs: Dict[str, "Job"] = {}
 _jobs_order: List[str] = []
 _jobs_lock = threading.Lock()
+# Ревизия реестра: растёт при любом изменении состава/статусов задач. Нужна,
+# чтобы /api/jobs отдавал ГОТОВЫЙ снимок, пока ничего не менялось: панель
+# опрашивает раз в 1.5 с, а сборка снимка — три прохода по всему реестру.
+_rev = 0
+_rev_lock = threading.Lock()
+_snapshot_cache = None            # (rev, limit, monotonic_ts, payload)
+_SNAPSHOT_TTL = 5.0               # потолок на случай пропущенного bump'а
 # Две независимые дорожки: интерактивная (ручные действия идут сразу) и фоновая
 # (тяжёлый автосинк). Один и тот же плейлист защищён файловым локом, поэтому
 # дорожки не подерутся за один sync.
@@ -47,6 +54,15 @@ def _next_id() -> str:
 
 
 MAX_LOG_LINES = 4000  # держим в памяти только хвост лога каждой задачи
+# Сколько строк лога оставлять у ЗАВЕРШЁННОЙ задачи. У живой лог нужен целиком,
+# у завершённой интересен хвост с ошибкой — иначе сотни задач × тысячи строк
+# висят в памяти всё время простоя сервиса.
+FINISHED_LOG_LINES = 300
+# Сколько завершённых задач держать в реестре. Раньше реестр рос бесконечно
+# (удаление было только вручную из UI) — на пакетных загрузках это главная
+# утечка памяти и лишняя работа на каждом опросе /api/jobs.
+MAX_FINISHED_JOBS = 400
+_FINISHED = ("done", "error", "cancelled")
 
 # Дорожки воркеров: интерактивная (ручные действия) и фоновая (тяжёлый автосинк).
 LANE_INTERACTIVE = "interactive"
@@ -90,6 +106,15 @@ class Job:
                 del self.log[:overflow]
                 self._dropped += overflow
 
+    def trim_log(self, keep: int) -> None:
+        """Подрезать лог до последних `keep` строк (для завершённых задач).
+        Счётчик _dropped растёт, поэтому offset'ы дочитывания лога не ломаются."""
+        with self._lock:
+            overflow = len(self.log) - keep
+            if overflow > 0:
+                del self.log[:overflow]
+                self._dropped += overflow
+
     def total_log_len(self) -> int:
         return self._dropped + len(self.log)
 
@@ -114,6 +139,46 @@ class Job:
                 d["log"] = self.log[local:]
                 d["log_offset"] = abs_start
         return d
+
+
+def _bump_rev() -> None:
+    """Пометить реестр изменившимся — инвалидирует кэш снимка для /api/jobs."""
+    global _rev
+    with _rev_lock:
+        _rev += 1
+
+
+def _malloc_trim() -> None:
+    """Вернуть освобождённую память аллокатора ядру ОС (glibc).
+
+    Без этого RSS веб-процесса остаётся на пике после тяжёлого синка и висит
+    так всё время простоя, хотя объекты уже собраны. На не-glibc — no-op."""
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:  # noqa: BLE001 — не glibc / нет symbol'а: не критично
+        pass
+
+
+def _prune_finished_locked() -> int:
+    """Вытеснить самые старые завершённые задачи сверх MAX_FINISHED_JOBS.
+
+    Задачи из ещё АКТИВНЫХ групп (пакетная загрузка плейлиста, у которой что-то
+    в очереди/идёт) не трогаем — иначе у группы поехал бы прогресс X/Y.
+    Вызывать под _jobs_lock. Возвращает число вытесненных."""
+    active_titles = {_jobs[jid].title for jid in _jobs_order
+                     if _jobs[jid].status in ("queued", "running")}
+    finished = [jid for jid in _jobs_order
+                if _jobs[jid].status in _FINISHED
+                and _jobs[jid].title not in active_titles]
+    excess = len(finished) - MAX_FINISHED_JOBS
+    if excess <= 0:
+        return 0
+    drop = set(finished[:excess])
+    for jid in drop:
+        _jobs.pop(jid, None)
+    _jobs_order[:] = [jid for jid in _jobs_order if jid not in drop]
+    return len(drop)
 
 
 # ------------------------------------------------------------------ локи
@@ -311,6 +376,7 @@ def _common_output_args() -> List[str]:
         "--format", config.AUDIO_FORMAT,
         "--simple-tui",
         "--log-level", "INFO",
+        "--threads", str(config.SPOTDL_THREADS),
     ]
 
 
@@ -512,6 +578,8 @@ def _enqueue(job: Job) -> Job:
     with _jobs_lock:
         _jobs[job.id] = job
         _jobs_order.append(job.id)
+        _prune_finished_locked()
+    _bump_rev()
     _queues[job.lane].put(job.id)
     return job
 
@@ -673,7 +741,8 @@ def remove_job(job_id: str) -> bool:
             _jobs_order.remove(job_id)
         except ValueError:
             pass
-        return True
+    _bump_rev()
+    return True
 
 
 def cancel_job(job_id: str) -> bool:
@@ -694,6 +763,7 @@ def cancel_job(job_id: str) -> bool:
         if job.status == "queued":
             job.status = "cancelled"
             job.finished = time.time()
+    _bump_rev()
     return True
 
 
@@ -729,6 +799,28 @@ def list_jobs(limit: int = 50) -> List[dict]:
         return out
 
 
+def snapshot(limit: int = 50) -> dict:
+    """Готовый ответ для /api/jobs, закэшированный по ревизии реестра.
+
+    Панель опрашивается раз в 1.5 с (и из каждой открытой вкладки), а сборка —
+    три прохода по всему реестру. Пока состав/статусы не менялись, отдаём тот
+    же объект; TTL — страховка на случай пропущенного _bump_rev()."""
+    global _snapshot_cache
+    cached = _snapshot_cache
+    now = time.monotonic()
+    if (cached is not None and cached[0] == _rev and cached[1] == limit
+            and now - cached[2] < _SNAPSHOT_TTL):
+        return cached[3]
+    rev_at_start = _rev
+    payload = {
+        "jobs": list_jobs(limit),
+        "active": active_count(),
+        "groups": job_groups(),
+    }
+    _snapshot_cache = (rev_at_start, limit, now, payload)
+    return payload
+
+
 # ------------------------------------------------------------------ воркеры (по дорожке)
 def _worker(lane: str) -> None:
     q = _queues[lane]
@@ -746,6 +838,7 @@ def _worker(lane: str) -> None:
             continue
         job.status = "running"
         job.started = time.time()
+        _bump_rev()
         try:
             job.runner(job)
             if job.cancelled:
@@ -757,6 +850,16 @@ def _worker(lane: str) -> None:
             job.append(f"[exception] {type(e).__name__}: {e}")
         finally:
             job.finished = time.time()
+            # Завершённой задаче полный лог больше не нужен: оставляем хвост,
+            # чистим вытесненные задачи и отдаём память ОС — иначе сервис
+            # держит пик потребления всё время простоя.
+            job.trim_log(FINISHED_LOG_LINES)
+            with _jobs_lock:
+                _prune_finished_locked()
+            _bump_rev()
+            idle = all(q2.empty() for q2 in _queues.values())
+            if idle:
+                _malloc_trim()
             q.task_done()
 
 

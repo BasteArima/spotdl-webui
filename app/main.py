@@ -142,6 +142,8 @@ class ResolveNamesIn(BaseModel):
 def api_resolve_names(body: ResolveNamesIn):
     """Дорезолвить настоящие имена треков со Spotify (для битых имён вроде
     'musicShelfRenderer'). Результат кешируется, резолв — в подпроцессе."""
+    if len(_NAME_CACHE) > 5000:      # кэш имён не должен расти бесконечно
+        _NAME_CACHE.clear()
     todo = [u for u in body.urls if u and u not in _NAME_CACHE][:60]
     if todo:
         try:
@@ -268,11 +270,9 @@ def api_jobs(limit: int = 50):
     lim = max(1, min(limit, 1000))
     # jobs — индивидуальные задачи (для синхронизации строк «Ненайденных» и вкладки);
     # groups — агрегаты пакетных загрузок (плейлист целиком) с прогрессом X/Y для панели.
-    return {
-        "jobs": jobs.list_jobs(lim),
-        "active": jobs.active_count(),
-        "groups": jobs.job_groups(),
-    }
+    # Снимок кэшируется по ревизии реестра: пока ничего не менялось, опрос панели
+    # не гоняет три прохода по всему реестру заново.
+    return jobs.snapshot(lim)
 
 
 @app.post("/api/jobs/{job_id}/cancel", dependencies=[Depends(require_auth)])

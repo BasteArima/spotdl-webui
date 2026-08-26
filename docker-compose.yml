@@ -4,6 +4,19 @@ services:
     container_name: spotdl-webui
     pull_policy: always
     restart: unless-stopped
+    # Потолок ресурсов: внутри контейнера живут не только веб, но и spotdl,
+    # ffmpeg, deno и librespot-воркер — без лимита пик их суммы упирается в
+    # свободную память хоста. 1 ГБ хватает на синк большого плейлиста.
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 2.0
+    # Логи контейнера иначе растут без предела (webui дублирует туда весь
+    # вывод spotdl построчно).
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "4535:8000"
     environment:
@@ -36,6 +49,10 @@ services:
       #
       # Битрейт mp3 (заливка/Deezer/апгрейд). 320k — максимум Spotify.
       # - UPLOAD_BITRATE=320k
+      #
+      # Параллельность spotdl. По умолчанию 2 (на каждую загрузку — свой ffmpeg,
+      # 4 потока забивают все ядра NAS). Больше — быстрее, но CPU выше:
+      # - SPOTDL_THREADS=2
       #
       # Апгрейд качества до 320k (вкладка «Апгрейд 320k»):
       # - UPGRADE_MIN_BITRATE=300      # пропускать файлы, что уже >= этого (kbps)
