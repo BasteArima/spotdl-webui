@@ -294,7 +294,7 @@ def playlist_track_count(pl: playlists.Playlist) -> Optional[int]:
         return cached[1]
     try:
         with open(path, "r", encoding="utf-8") as fh:
-            count = len(json.load(fh).get("songs") or [])
+            count = len(playlists.savefile_songs(json.load(fh)))
     except (OSError, ValueError, AttributeError):
         return None
     _savefile_counts[path] = (mtime, count)
@@ -575,7 +575,9 @@ def _run_process(job: Job, cmd: List[str], cwd: str = "/",
 
     assert proc.stdout is not None
     for line in proc.stdout:
-        line = line.rstrip("\n")
+        # rstrip() целиком: rich добивает строки пробелами до ширины консоли
+        # (COLUMNS=1000) — без этого каждая строка лога весила бы ~1 КБ
+        line = line.rstrip()
         out_lines.append(line)
         job.append(line)
         print(f"[{job.id}] {line}", flush=True)  # дублируем в docker logs
@@ -649,44 +651,62 @@ class LikedSongsUnavailable(RuntimeError):
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def _liked_songs_query(job: Job) -> List[str]:
-    """Ссылки на треки Liked Songs — запросом к Spotify от имени пользователя
-    (подпроцесс app.spotify_login --saved-urls, ~1 запрос на 50 треков).
+def _liked_songs_file(job: Job, pl: playlists.Playlist) -> tuple:
+    """Готовит Liked Songs для spotdl: подпроцесс app.spotify_login
+    --saved-songs собирает ВСЕ данные треков от имени пользователя (~55
+    запросов на 800 треков) и пишет их файлом в формате spotdl. Возвращает
+    (путь, число треков).
 
-    НЕ `spotdl sync saved --user-auth`: так spotdl гонит ВСЕ запросы через
-    официальный API приложения пользователя и дозапрашивает каждый трек (~3
-    запроса на трек) — на сотнях треков Spotify штрафует dev-приложение на
-    сутки (429, Retry-After ~86400), а spotipy честно спит эти сутки внутри
-    задачи. Список ссылок spotdl разбирает своим обычным клиентом, как плейлист."""
+    Почему не проще:
+      • `spotdl sync saved --user-auth` гонит все метаданные (~3 запроса на
+        трек) через dev-приложение пользователя — Spotify штрафует его 429 на
+        сутки (было на 806 треках);
+      • список ССЫЛОК на треки spotdl разбирает по одной и последовательно
+        (~15–25 с на трек) — часы подготовки до первой загрузки.
+    Из готового файла spotdl качает сразу, без запросов за метаданными."""
     if not config.spotify_user_logged_in():
         raise LikedSongsUnavailable(LOGIN_HINT)
-    job.append("[liked] получаю список Liked Songs из Spotify…")
+    job.append("[liked] получаю Liked Songs из Spotify (список, исполнители, альбомы)…")
+    os.makedirs(config.UPLOADS_DIR, exist_ok=True)
+    path = os.path.join(config.UPLOADS_DIR, f"liked-{pl.id}.spotdl")
     try:
-        r = subprocess.run([sys.executable, "-m", "app.spotify_login", "--saved-urls"],
+        r = subprocess.run([sys.executable, "-m", "app.spotify_login", "--saved-songs", path],
                            cwd=_PROJECT_DIR, stdin=subprocess.DEVNULL,
-                           capture_output=True, text=True, timeout=300)
+                           capture_output=True, text=True, timeout=600)
         lines = [ln for ln in (r.stdout or "").splitlines() if ln.strip()]
         res = json.loads(lines[-1]) if lines else {}
     except subprocess.TimeoutExpired:
-        raise LikedSongsUnavailable("Spotify не отдал список за 5 минут") from None
+        raise LikedSongsUnavailable("Spotify не отдал данные за 10 минут") from None
     except ValueError:
         res = {}
     if not res.get("ok"):
         err = res.get("error") or ("неожиданный ответ: " + (r.stderr or "").strip()[-300:])
         raise LikedSongsUnavailable(err + (" " + res["hint"] if res.get("hint") else ""))
-    urls = res.get("urls") or []
-    job.append(f"[liked] треков в Liked Songs: {len(urls)}")
-    return urls
+    count = int(res.get("count") or 0)
+    job.append(f"[liked] треков в Liked Songs: {count}")
+    return path, count
 
 
-def sync_args(pl: playlists.Playlist, query: Optional[List[str]] = None) -> List[str]:
-    """query — что синкать вместо pl.url (для Liked Songs — список ссылок на
-    треки). Позиционные запросы идут ПЕРВЫМИ: флаги со списком значений
-    (--audio, --lyrics) иначе съели бы их."""
+def sync_args(pl: playlists.Playlist) -> List[str]:
+    """Позиционный запрос идёт ПЕРВЫМ: флаги со списком значений (--audio,
+    --lyrics) иначе съели бы его."""
     os.makedirs(config.ERRORS_DIR, exist_ok=True)
     os.makedirs(config.PLAYLISTS_M3U_DIR, exist_ok=True)
     return [
-        "sync", *(query or [pl.url]),
+        "sync", pl.url,
+        "--save-file", config.savefile_path(pl.id),
+        "--save-errors", config.errors_path(pl.safe),
+        "--m3u", config.m3u_path(pl.safe),
+    ] + _common_output_args()
+
+
+def liked_args(pl: playlists.Playlist, songs_file: str) -> List[str]:
+    """Liked Songs: `download` из готового файла вместо `sync`. m3u, файл
+    ненайденных и save-файл (списком треков) spotdl пишет и в этом режиме."""
+    os.makedirs(config.ERRORS_DIR, exist_ok=True)
+    os.makedirs(config.PLAYLISTS_M3U_DIR, exist_ok=True)
+    return [
+        "download", songs_file,
         "--save-file", config.savefile_path(pl.id),
         "--save-errors", config.errors_path(pl.safe),
         "--m3u", config.m3u_path(pl.safe),
@@ -745,27 +765,28 @@ def _sync_locked(job: Job, pl: playlists.Playlist, index: int = 0, count: int = 
 
 
 def _sync_locked_inner(job: Job, pl: playlists.Playlist, prog: "SyncProgress") -> None:
-    query = None
+    args = None
     if is_saved(pl.url):
-        # список — ДО сброса errors-файла: не получили список — старые
-        # «ненайденные» остаются как были
+        # данные — ДО сброса errors-файла: не получили — старые «ненайденные»
+        # остаются как были
         prog.set_phase("list")
         try:
-            query = _liked_songs_query(job)
+            songs_file, count = _liked_songs_file(job, pl)
         except LikedSongsUnavailable as e:
             prog.set_phase("done")
             raise LikedSongsUnavailable(f"{pl.name}: {e}") from None
-        if not query:
+        if not count:
             job.append(f"[info] {pl.name}: Liked Songs пуст — нечего синхронизировать")
             prog.set_phase("done")
             return
-        prog.total = len(query)
+        prog.total = count
         prog.set_phase("prepare")
+        args = liked_args(pl, songs_file)
     with PlaylistLock(pl.id, job):
         _reset_errors_file(pl.safe)
         # мягкая отмена: текущий spotdl допишет m3u/save-file, sync-all встанет
         # между плейлистами (а не порвёт файлы на полузаписи).
-        rc, _out = run_spotdl(job, sync_args(pl, query), kill_on_cancel=False, on_line=prog.feed)
+        rc, _out = run_spotdl(job, args or sync_args(pl), kill_on_cancel=False, on_line=prog.feed)
     prog.set_phase("done")
     _record_sync(prog, ok=(rc == 0))
 

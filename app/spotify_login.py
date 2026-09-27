@@ -21,6 +21,7 @@ http://127.0.0.1:9900/, API — Web API); его client_id/secret задаютс
 import json
 import os
 import sys
+import time
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from . import config
@@ -160,83 +161,117 @@ def _user_oauth():
                         cache_handler=CacheFileHandler(cache_path=config.SPOTIFY_USER_TOKEN_FILE))
 
 
-def saved_track_urls() -> dict:
-    """Ссылки на все треки Liked Songs от имени пользователя.
+def _chunks(items: list, size: int):
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
 
-    Зачем самим, а не `spotdl sync saved --user-auth`: с --user-auth spotdl ходит
-    ВСЁ через официальный API вашего приложения и на каждый трек дозапрашивает
-    трек+исполнителя+альбом — ~3 запроса × сотни треков, и Spotify штрафует
-    dev-приложение на сутки. Здесь — страницы по 50 (~17 запросов на 800 треков),
-    а метаданные spotdl потом берёт своим обычным клиентом, как для плейлистов."""
+
+def _song_dict(track: dict, album: dict, artist: dict) -> dict:
+    """Трек в формате spotdl Song — те же поля и та же логика, что в
+    spotdl Song.from_url. Все поля, по которым spotdl решает «дозапросить
+    трек» (genres, disc_count, tracks_count, track_number, album_id,
+    album_artist), заполнены — иначе он снова пошёл бы в Spotify за каждым."""
+    alb = album or track.get("album") or {}
+    release = str(alb.get("release_date") or "")
+    try:
+        year = int(release[:4])
+    except ValueError:
+        year = 0
+    images = [i for i in alb.get("images") or [] if i.get("url")]
+    cover = max(images, key=lambda i: (i.get("width") or 0) * (i.get("height") or 0))["url"] if images else None
+    items = ((alb.get("tracks") or {}).get("items") or [])
+    disc_count = int(items[-1].get("disc_number") or 1) if items else int(track.get("disc_number") or 1)
+    copyrights = alb.get("copyrights") or []
+    artists = track.get("artists") or [{}]
+    alb_artists = alb.get("artists") or artists
+    return {
+        "name": track["name"],
+        "artists": [a.get("name") or "" for a in artists],
+        "artist": artists[0].get("name") or "",
+        "artist_id": artists[0].get("id"),
+        "genres": list(alb.get("genres") or []) + list((artist or {}).get("genres") or []),
+        "disc_number": track.get("disc_number") or 1,
+        "disc_count": disc_count,
+        "album_id": alb.get("id"),
+        "album_name": alb.get("name") or "",
+        "album_artist": alb_artists[0].get("name") or "",
+        "album_type": alb.get("album_type"),
+        "duration": int((track.get("duration_ms") or 0) / 1000),
+        "year": year,
+        "date": release,
+        "track_number": track.get("track_number") or 1,
+        "tracks_count": alb.get("total_tracks") or 1,
+        "song_id": track["id"],
+        "explicit": bool(track.get("explicit")),
+        "publisher": alb.get("label") or "",
+        "url": (track.get("external_urls") or {}).get("spotify") or f"https://open.spotify.com/track/{track['id']}",
+        "isrc": (track.get("external_ids") or {}).get("isrc"),
+        "cover_url": cover,
+        "copyright_text": copyrights[0].get("text") if copyrights else None,
+        "popularity": track.get("popularity"),
+    }
+
+
+def saved_songs() -> dict:
+    """Все треки Liked Songs сразу в формате spotdl (для `spotdl download
+    <файл>.spotdl`): список «Любимых» страницами по 50 + исполнители (жанры)
+    пачками по 50 + альбомы (лейбл, копирайт, число дисков) пачками по 20 —
+    ~55 запросов на 800 треков.
+
+    Зачем: ссылки на треки spotdl разбирает ПО ОДНОЙ и последовательно
+    (~15–25 с на трек: 806 треков — часы подготовки до первой загрузки). Из
+    готового файла он качает сразу, не делая ни одного запроса за метаданными."""
     from spotipy import SpotifyException
     sp = _client(_user_oauth())
-    urls = []
     try:
+        tracks = []
         page = sp.current_user_saved_tracks(limit=50)
         while page:
             for item in page.get("items") or []:
-                track = (item or {}).get("track") or (item or {}).get("item") or {}
-                if track.get("id") and not track.get("is_local"):
-                    urls.append(f"https://open.spotify.com/track/{track['id']}")
+                t = (item or {}).get("track") or (item or {}).get("item") or {}
+                if t.get("id") and t.get("name") and not t.get("is_local") and t.get("duration_ms"):
+                    tracks.append(t)
             page = sp.next(page) if page.get("next") else None
+
+        artist_ids = sorted({(t.get("artists") or [{}])[0].get("id") for t in tracks} - {None})
+        artists = {}
+        for chunk in _chunks(artist_ids, 50):
+            for a in (sp.artists(chunk) or {}).get("artists") or []:
+                if a:
+                    artists[a["id"]] = a
+            time.sleep(0.1)      # не частим: лимит у dev-приложений строгий
+        album_ids = sorted({(t.get("album") or {}).get("id") for t in tracks} - {None})
+        albums = {}
+        for chunk in _chunks(album_ids, 20):
+            for al in (sp.albums(chunk) or {}).get("albums") or []:
+                if al:
+                    albums[al["id"]] = al
+            time.sleep(0.1)
     except SpotifyException as exc:
         if exc.http_status == 429:
             return {"ok": False, "error": rate_limit_message(exc)}
         return {"ok": False, "error": f"Spotify отклонил запрос: {exc}",
                 "hint": _HINT_403 if exc.http_status == 403 else ""}
-    return {"ok": True, "urls": urls}
+
+    songs = []
+    for t in tracks:
+        artist = artists.get((t.get("artists") or [{}])[0].get("id"))
+        album = albums.get((t.get("album") or {}).get("id"))
+        songs.append(_song_dict(t, album, artist))
+    return {"ok": True, "songs": songs}
 
 
-def _interactive() -> None:
-    cid, _secret, own = app_credentials()
-    if not own:
-        print("[warn] своё Spotify-приложение не настроено — пробую общий client_id spotdl.\n"
-              "       Скорее всего Spotify ответит «User not registered in the Developer\n"
-              "       Dashboard». Задайте приложение во вкладке «Настройки» webui.\n")
-    print("\n=== Шаг 1 ===")
-    print("Открой ссылку в браузере на ПК, войди в Spotify (можно через Facebook)")
-    print("и разреши доступ:\n")
-    print(authorize_url(cid))
-    print("\n=== Шаг 2 ===")
-    print(f"Браузер откроет {REDIRECT_URI}?code=... — страница НЕ загрузится, это нормально.")
-    print("Скопируй весь адрес из адресной строки.\n")
-
-    code, _state, error = parse_redirect(input("Вставь адрес (или только code) и нажми Enter: "))
-    if error:
-        print(f"[error] Spotify: {error}", file=sys.stderr)
-        sys.exit(2)
-    if not code:
-        print("[error] пустой code", file=sys.stderr)
-        sys.exit(2)
-
-    print("\nПолучаю токен...")
-    res = exchange(code)
-    if not res["ok"]:
-        print(f"[error] {res['error']}", file=sys.stderr)
-        if res.get("hint"):
-            print(f"        {res['hint']}", file=sys.stderr)
-        sys.exit(1)
-    print(f"\n✅ Готово: вошли как {res['user']}, в Liked Songs треков: {res['total']}.")
-    print("Теперь добавьте в UI плейлист со ссылкой `saved` и нажмите Sync.")
-
-
-def _exchange_cli() -> None:
-    """Режим для веба: code из stdin (не в argv — его видно в ps), ответ —
-    ОДНА JSON-строка последней строкой stdout."""
-    code = sys.stdin.readline().strip()
+def _saved_songs_cli(out_path: str) -> None:
+    """Режим для синка Liked Songs: треки пишутся в out_path (список в формате
+    spotdl), в stdout — ASCII-JSON {"ok", "count"} последней строкой."""
     try:
-        res = exchange(code) if code else {"ok": False, "error": "пустой code"}
-    except Exception as exc:  # noqa: BLE001 — веб должен получить JSON, а не трейсбек
-        res = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-    # ASCII-JSON: веб разбирает вывод независимо от локали подпроцесса
-    print(json.dumps(res), flush=True)
-    sys.exit(0 if res.get("ok") else 1)
-
-
-def _saved_urls_cli() -> None:
-    """Режим для синка Liked Songs: ответ — ASCII-JSON последней строкой stdout."""
-    try:
-        res = saved_track_urls()
+        res = saved_songs()
+        if res.get("ok"):
+            tmp = out_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(res["songs"], fh, ensure_ascii=False)
+            os.replace(tmp, out_path)
+            res = {"ok": True, "count": len(res["songs"])}
     except Exception as exc:  # noqa: BLE001
         res = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     print(json.dumps(res), flush=True)
@@ -246,8 +281,8 @@ def _saved_urls_cli() -> None:
 if __name__ == "__main__":
     if "--exchange" in sys.argv[1:]:
         _exchange_cli()
-    if "--saved-urls" in sys.argv[1:]:
-        _saved_urls_cli()
+    if "--saved-songs" in sys.argv[1:]:
+        _saved_songs_cli(sys.argv[sys.argv.index("--saved-songs") + 1])
     try:
         _interactive()
     except KeyboardInterrupt:

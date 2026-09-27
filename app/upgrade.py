@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 
-from . import config, navidrome, settings
+from . import config, navidrome, playlists, settings
 
 _STATE_FILE = os.path.join(config.CONF_DIR, ".webui-upgraded.json")
 
@@ -64,7 +64,9 @@ class _UpgradeController:
                     data = json.load(fh)
             except (OSError, ValueError):
                 continue
-            for t in data if isinstance(data, list) else []:
+            # раньше читался только формат-список (download), а `sync` пишет
+            # объект {"songs": [...]} — треки синкнутых плейлистов апгрейд не видел
+            for t in playlists.savefile_songs(data):
                 url = t.get("url")
                 if not url or url in seen:
                     continue

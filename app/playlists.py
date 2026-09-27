@@ -41,6 +41,17 @@ class Playlist:
         }
 
 
+def savefile_songs(data) -> list:
+    """Треки из save-файла spotdl (`/conf/<id>.spotdl`). Форматов два:
+    `sync --save-file` пишет {"type": "sync", "query": [...], "songs": [...]},
+    `download --save-file` (так синкаются Liked Songs) — просто список треков."""
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        return data.get("songs") or []
+    return []
+
+
 def _parse_line(line: str) -> Optional[tuple]:
     """Возвращает (name, url) либо None для пустых/комментариев/без '|'."""
     if not line:

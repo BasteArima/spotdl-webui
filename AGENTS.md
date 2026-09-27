@@ -51,13 +51,16 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
    Кнопка «Spotify 320k». Нужны креды (см. §5).
 4. **Заливка файла** ([place_localfile.py](app/place_localfile.py)) — кнопка «📁 Файл»:
    локальный файл → мета/обложка со Spotify → в библиотеку.
-5. **Liked Songs** — запись `Имя|saved` в `playlists.txt`. Список треков сервис
-   забирает САМ через токен пользователя (подпроцесс `app.spotify_login
-   --saved-urls`, страницы по 50) и передаёт spotdl ссылки на треки БЕЗ
-   `--user-auth` (`jobs._liked_songs_query`). НЕ `spotdl sync saved --user-auth`:
-   так spotdl гонит все метаданные (~3 запроса/трек) через dev-приложение
-   пользователя → 429 со штрафом ~сутки (было на 806 треках). spotipy создаётся
-   с `retries=0` и списком без 429 — иначе он спит Retry-After внутри задачи.
+5. **Liked Songs** — запись `Имя|saved` в `playlists.txt`. Данные треков сервис
+   собирает САМ через токен пользователя (подпроцесс `app.spotify_login
+   --saved-songs <файл>`: треки по 50, исполнители по 50, альбомы по 20 — ~55
+   запросов на 800) в файл формата spotdl (список Song-словарей), дальше
+   `spotdl download <файл> --save-file … --m3u … --save-errors …`
+   (`jobs.liked_args`). Отвергнуто на практике: `sync saved --user-auth` (~3
+   запроса/трек через dev-приложение → 429 со штрафом ~сутки) и `sync url1 url2…`
+   (spotdl разбирает ссылки по одной, ~20 с на трек → часы подготовки).
+   spotipy создаётся с `retries=0` и непустым списком без 429 — иначе спит
+   Retry-After внутри задачи.
    Токен создаёт вход из UI («Настройки» → «Войти в
    Spotify»): веб строит authorize-URL сам (`spotify_login.authorize_url`, с `state`
    в памяти, TTL 15 мин), пользователь вставляет адрес `127.0.0.1:9900/?code=…`,
