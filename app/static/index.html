@@ -32,12 +32,15 @@
         <button data-view="settings">Настройки</button>
       </nav>
       <span class="spacer"></span>
-      <label class="small muted" id="safe-mode-label" title="Одиночные «Spotify 320k» качать в real-time (скорость прослушивания, анти-бан). Массовая закачка и апгрейд — всегда real-time." style="display:flex;align-items:center;gap:6px;cursor:pointer">
-        <input type="checkbox" id="safe-mode-toggle"> Безопасный режим
-      </label>
-      <button class="btn secondary" id="syncall-btn">Синхронизировать всё</button>
-      <button class="btn secondary icon-btn" id="theme-btn" title="Тема">🌓</button>
-      <button class="btn secondary" id="logout-btn">Выйти</button>
+      <!-- правый кластер: на узких экранах навигация уходит под него второй строкой -->
+      <div class="bar-actions">
+        <label class="small muted" id="safe-mode-label" title="Безопасный режим: одиночные «Spotify 320k» качать в real-time (скорость прослушивания, анти-бан). Массовая закачка и апгрейд — всегда real-time.">
+          <input type="checkbox" id="safe-mode-toggle"> <span class="lbl-long">Безопасный режим</span>
+        </label>
+        <button class="btn secondary" id="syncall-btn" title="Синхронизировать все плейлисты"><span class="lbl-long">Синхронизировать всё</span><span class="lbl-short">⟳ Синк</span></button>
+        <button class="btn secondary icon-btn" id="theme-btn" title="Тема">🌓</button>
+        <button class="btn secondary" id="logout-btn">Выйти</button>
+      </div>
     </div>
   </header>
 

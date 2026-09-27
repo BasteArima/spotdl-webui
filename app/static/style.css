@@ -161,10 +161,13 @@ header h1 {
 }
 header h1 .small { font-size: 11px; font-weight: 500; }
 header .spacer { flex: 1; }
+.bar-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+#safe-mode-label { display: flex; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap; }
+.lbl-short { display: none; }
 
 /* сегментированный контрол вместо вкладок-кнопок */
 nav {
-  display: inline-flex; gap: 2px;
+  display: inline-flex; gap: 2px; min-width: 0;
   background: var(--fill); padding: 2px; border-radius: 9px;
 }
 nav button {
@@ -490,6 +493,28 @@ tr.row-done { opacity: .45; }
 #toast.show { display: block; opacity: 1; transform: translateX(-50%) translateY(0); }
 
 /* ---------------------------------------------------------------- адаптивность */
+/* Шапка: в одну строку всё помещается от ~1070px. Уже — навигация уходит второй
+   строкой на всю ширину и скроллится по горизонтали, если вкладки не влезают. */
+@media (max-width: 1080px) {
+  .bar-inner { flex-wrap: wrap; row-gap: 8px; }
+  header nav {
+    order: 3; flex: 1 1 100%;
+    overflow-x: auto; scrollbar-width: none;
+  }
+  header nav::-webkit-scrollbar { display: none; }
+  header nav button { flex: 1 0 auto; }
+}
+/* телефон: длинные подписи прячем (смысл остаётся в title) */
+@media (max-width: 560px) {
+  .bar-inner { padding: 8px 12px; gap: 10px; }
+  .bar-actions { gap: 6px; }
+  #safe-mode-label .lbl-long, #syncall-btn .lbl-long { display: none; }
+  #syncall-btn .lbl-short { display: inline; }
+  header h1 .small { display: none; }
+  /* кластер «Обновить · Скачать все · источник» в строку уже не влезает */
+  .tb-group { flex-wrap: wrap; }
+  .toolbar input[type=text] { min-width: 0; }
+}
 @media (max-width: 760px) {
   main { padding: 14px 12px 48px; }
   header { gap: 12px; padding: 9px 13px; }
