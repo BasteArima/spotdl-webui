@@ -113,14 +113,78 @@ def exchange(code: str) -> dict:
         return fail("токен не сохранился")
     _fix_owner(path)
 
-    sp = Spotify(auth_manager=oauth)
+    sp = _client(oauth)
     try:
         me = sp.current_user() or {}
         total = (sp.current_user_saved_tracks(limit=1) or {}).get("total")
     except SpotifyException as exc:
+        if exc.http_status == 429:
+            # токен при этом рабочий — не удаляем, просто лимит приложения
+            return {"ok": False, "error": rate_limit_message(exc)}
         return fail(f"Spotify отклонил запрос: {exc}",
                     _HINT_403 if exc.http_status == 403 else "")
     return {"ok": True, "user": me.get("display_name") or me.get("id") or "?", "total": total}
+
+
+def _client(auth_manager):
+    """spotipy без ожидания на 429. По умолчанию он честно спит Retry-After, а
+    штраф Spotify для приложений в dev-режиме бывает на СУТКИ — задача висела бы
+    сутки и держала очередь.
+
+    Именно retries=0: urllib3 повторяет ответ с заголовком Retry-After (429/503)
+    при ЛЮБОМ status_forcelist, если total > 0 — убрать 429 из списка мало
+    (проверено). С нулём ответ сразу становится SpotifyException(429) с
+    заголовками, откуда берём Retry-After для сообщения."""
+    from spotipy import Spotify
+    return Spotify(auth_manager=auth_manager, requests_timeout=20,
+                   # не пустой: пустой spotipy заменяет своим списком, где есть 429
+                   status_forcelist=(500, 502, 503, 504), retries=0, status_retries=0)
+
+
+def rate_limit_message(exc) -> str:
+    try:
+        wait = int((getattr(exc, "headers", None) or {}).get("Retry-After", 0))
+    except (TypeError, ValueError):
+        wait = 0
+    when = (f" Повтор возможен через ~{wait / 3600:.1f} ч." if wait >= 3600
+            else f" Повтор возможен через ~{max(1, wait // 60)} мин." if wait else "")
+    return "Spotify временно ограничил запросы вашего приложения (429)." + when
+
+
+def _user_oauth():
+    from spotipy.cache_handler import CacheFileHandler
+    from spotipy.oauth2 import SpotifyOAuth
+    cid, secret, _own = app_credentials()
+    return SpotifyOAuth(client_id=cid, client_secret=secret, redirect_uri=REDIRECT_URI,
+                        scope=SCOPE, open_browser=False,
+                        cache_handler=CacheFileHandler(cache_path=config.SPOTIFY_USER_TOKEN_FILE))
+
+
+def saved_track_urls() -> dict:
+    """Ссылки на все треки Liked Songs от имени пользователя.
+
+    Зачем самим, а не `spotdl sync saved --user-auth`: с --user-auth spotdl ходит
+    ВСЁ через официальный API вашего приложения и на каждый трек дозапрашивает
+    трек+исполнителя+альбом — ~3 запроса × сотни треков, и Spotify штрафует
+    dev-приложение на сутки. Здесь — страницы по 50 (~17 запросов на 800 треков),
+    а метаданные spotdl потом берёт своим обычным клиентом, как для плейлистов."""
+    from spotipy import SpotifyException
+    sp = _client(_user_oauth())
+    urls = []
+    try:
+        page = sp.current_user_saved_tracks(limit=50)
+        while page:
+            for item in page.get("items") or []:
+                track = (item or {}).get("track") or (item or {}).get("item") or {}
+                if track.get("id") and not track.get("is_local"):
+                    urls.append(f"https://open.spotify.com/track/{track['id']}")
+            page = sp.next(page) if page.get("next") else None
+    except SpotifyException as exc:
+        if exc.http_status == 429:
+            return {"ok": False, "error": rate_limit_message(exc)}
+        return {"ok": False, "error": f"Spotify отклонил запрос: {exc}",
+                "hint": _HINT_403 if exc.http_status == 403 else ""}
+    return {"ok": True, "urls": urls}
 
 
 def _interactive() -> None:
@@ -169,9 +233,21 @@ def _exchange_cli() -> None:
     sys.exit(0 if res.get("ok") else 1)
 
 
+def _saved_urls_cli() -> None:
+    """Режим для синка Liked Songs: ответ — ASCII-JSON последней строкой stdout."""
+    try:
+        res = saved_track_urls()
+    except Exception as exc:  # noqa: BLE001
+        res = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    print(json.dumps(res), flush=True)
+    sys.exit(0 if res.get("ok") else 1)
+
+
 if __name__ == "__main__":
     if "--exchange" in sys.argv[1:]:
         _exchange_cli()
+    if "--saved-urls" in sys.argv[1:]:
+        _saved_urls_cli()
     try:
         _interactive()
     except KeyboardInterrupt:

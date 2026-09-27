@@ -51,9 +51,14 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
    Кнопка «Spotify 320k». Нужны креды (см. §5).
 4. **Заливка файла** ([place_localfile.py](app/place_localfile.py)) — кнопка «📁 Файл»:
    локальный файл → мета/обложка со Spotify → в библиотеку.
-5. **Liked Songs** — запись `Имя|saved` в `playlists.txt` → `spotdl sync saved
-   --user-auth --headless --cache-path /conf/.spotify-user-token.json` (+ свои
-   `--client-id/--client-secret`). Токен создаёт вход из UI («Настройки» → «Войти в
+5. **Liked Songs** — запись `Имя|saved` в `playlists.txt`. Список треков сервис
+   забирает САМ через токен пользователя (подпроцесс `app.spotify_login
+   --saved-urls`, страницы по 50) и передаёт spotdl ссылки на треки БЕЗ
+   `--user-auth` (`jobs._liked_songs_query`). НЕ `spotdl sync saved --user-auth`:
+   так spotdl гонит все метаданные (~3 запроса/трек) через dev-приложение
+   пользователя → 429 со штрафом ~сутки (было на 806 треках). spotipy создаётся
+   с `retries=0` и списком без 429 — иначе он спит Retry-After внутри задачи.
+   Токен создаёт вход из UI («Настройки» → «Войти в
    Spotify»): веб строит authorize-URL сам (`spotify_login.authorize_url`, с `state`
    в памяти, TTL 15 мин), пользователь вставляет адрес `127.0.0.1:9900/?code=…`,
    обмен code — в ПОДПРОЦЕССЕ `python -m app.spotify_login --exchange` (code через
@@ -127,11 +132,14 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
   т.п.) читают тот же json сами.
 - Только-env (пути, шаблон, PUID/PGID) — в UI read-only (`settings.system_info`).
 - Параметры spotdl для YouTube (`--bitrate`, `--audio`, `--lyrics`/`--generate-lrc`,
-  `--overwrite`, `--sync-without-deleting`) собираются в `jobs._common_output_args`
+  `--overwrite`) собираются в `jobs._common_output_args`
   / `sync_args` из настроек. Раньше не передавались вовсе → spotdl кодировал в
   128k. `--lyrics` без значений = не искать тексты; `.lrc` требует провайдера
   `synced` (добавляется автоматически). Флаги со списком значений (nargs="*")
   идут ПОСЛЕ позиционного запроса — иначе съедят его.
+- `spotdl sync <URL> --save-file` (как и старый автосинк) НИЧЕГО не удаляет —
+  удаление есть только в режиме `spotdl sync <file>.spotdl`. Поэтому настройки
+  «удалять убранные треки» нет.
 
 - **Navidrome** ([app/navidrome.py](app/navidrome.py)): любая успешная задача
   (воркер, `finally`) и каждый трек апгрейда зовут `navidrome.notify_changed()` —

@@ -12,6 +12,7 @@
              --format mp3
     download "<youtube>|<spotify>" --cookie-file ... --output "<...>" --format mp3
 """
+import json
 import os
 import queue
 import random
@@ -285,10 +286,23 @@ def _terminate_proc(proc) -> None:
 _SECRET_FLAGS = {"--client-secret"}
 
 
+_TRACK_URL = "https://open.spotify.com/track/"
+
+
 def _redact(cmd: List[str]) -> str:
-    out = []
+    """Команда для лога: секреты — ***, длинный список ссылок на треки (Liked
+    Songs, сотни штук) — одной пометкой вместо многокилобайтной строки."""
+    tracks = sum(1 for p in cmd if p.startswith(_TRACK_URL))
+    out, shown = [], False
     for i, part in enumerate(cmd):
-        out.append("***" if i and cmd[i - 1] in _SECRET_FLAGS else part)
+        if i and cmd[i - 1] in _SECRET_FLAGS:
+            out.append("***")
+        elif tracks > 3 and part.startswith(_TRACK_URL):
+            if not shown:
+                out.append(f"<{tracks} ссылок на треки>")
+                shown = True
+        else:
+            out.append(part)
     return " ".join(out)
 
 
@@ -414,37 +428,55 @@ def _common_output_args() -> List[str]:
 LOGIN_HINT = "нет входа в Spotify — войдите во вкладке «Настройки» webui"
 
 
-class SpotifyLoginRequired(RuntimeError):
-    """Для Liked Songs нужен OAuth-токен пользователя, а его ещё нет."""
+class LikedSongsUnavailable(RuntimeError):
+    """Список Liked Songs не получить: нет входа, лимит Spotify и т.п."""
 
 
-def _user_auth_args() -> List[str]:
-    """Флаги OAuth-входа для запроса `saved` (Liked Songs). Токен берётся из
-    кэша, созданного app.spotify_login; --headless — чтобы spotipy не пытался
-    открыть браузер/поднять сервер на 9900 внутри контейнера."""
-    args = ["--user-auth", "--headless", "--cache-path", config.SPOTIFY_USER_TOKEN_FILE]
-    cid, secret = config.spotify_app()
-    if cid and secret:
-        # refresh-токен привязан к приложению, выдавшему его, — те же id/secret,
-        # что использовал app.spotify_login.
-        args += ["--client-id", cid, "--client-secret", secret]
-    return args
+_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def sync_args(pl: playlists.Playlist) -> List[str]:
+def _liked_songs_query(job: Job) -> List[str]:
+    """Ссылки на треки Liked Songs — запросом к Spotify от имени пользователя
+    (подпроцесс app.spotify_login --saved-urls, ~1 запрос на 50 треков).
+
+    НЕ `spotdl sync saved --user-auth`: так spotdl гонит ВСЕ запросы через
+    официальный API приложения пользователя и дозапрашивает каждый трек (~3
+    запроса на трек) — на сотнях треков Spotify штрафует dev-приложение на
+    сутки (429, Retry-After ~86400), а spotipy честно спит эти сутки внутри
+    задачи. Список ссылок spotdl разбирает своим обычным клиентом, как плейлист."""
+    if not config.spotify_user_logged_in():
+        raise LikedSongsUnavailable(LOGIN_HINT)
+    job.append("[liked] получаю список Liked Songs из Spotify…")
+    try:
+        r = subprocess.run([sys.executable, "-m", "app.spotify_login", "--saved-urls"],
+                           cwd=_PROJECT_DIR, stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, timeout=300)
+        lines = [ln for ln in (r.stdout or "").splitlines() if ln.strip()]
+        res = json.loads(lines[-1]) if lines else {}
+    except subprocess.TimeoutExpired:
+        raise LikedSongsUnavailable("Spotify не отдал список за 5 минут") from None
+    except ValueError:
+        res = {}
+    if not res.get("ok"):
+        err = res.get("error") or ("неожиданный ответ: " + (r.stderr or "").strip()[-300:])
+        raise LikedSongsUnavailable(err + (" " + res["hint"] if res.get("hint") else ""))
+    urls = res.get("urls") or []
+    job.append(f"[liked] треков в Liked Songs: {len(urls)}")
+    return urls
+
+
+def sync_args(pl: playlists.Playlist, query: Optional[List[str]] = None) -> List[str]:
+    """query — что синкать вместо pl.url (для Liked Songs — список ссылок на
+    треки). Позиционные запросы идут ПЕРВЫМИ: флаги со списком значений
+    (--audio, --lyrics) иначе съели бы их."""
     os.makedirs(config.ERRORS_DIR, exist_ok=True)
     os.makedirs(config.PLAYLISTS_M3U_DIR, exist_ok=True)
-    args = [
-        "sync", pl.url,
+    return [
+        "sync", *(query or [pl.url]),
         "--save-file", config.savefile_path(pl.id),
         "--save-errors", config.errors_path(pl.safe),
         "--m3u", config.m3u_path(pl.safe),
     ] + _common_output_args()
-    if not settings.get("sync_delete"):
-        args.append("--sync-without-deleting")
-    if is_saved(pl.url):
-        args += _user_auth_args()
-    return args
 
 
 def download_match_args(youtube_url: str, spotify_url: str) -> List[str]:
@@ -467,14 +499,22 @@ def _reset_errors_file(safe: str) -> None:
 
 def _sync_locked(job: Job, pl: playlists.Playlist) -> None:
     """Sync плейлиста под локом со сбросом errors-файла (защита от дублей)."""
-    if is_saved(pl.url) and not config.spotify_user_logged_in():
-        # иначе spotdl упадёт на запросе ввода, а errors-файл уже будет сброшен
-        raise SpotifyLoginRequired(f"{pl.name}: {LOGIN_HINT}")
+    query = None
+    if is_saved(pl.url):
+        # список — ДО сброса errors-файла: не получили список — старые
+        # «ненайденные» остаются как были
+        try:
+            query = _liked_songs_query(job)
+        except LikedSongsUnavailable as e:
+            raise LikedSongsUnavailable(f"{pl.name}: {e}") from None
+        if not query:
+            job.append(f"[info] {pl.name}: Liked Songs пуст — нечего синхронизировать")
+            return
     with PlaylistLock(pl.id, job):
         _reset_errors_file(pl.safe)
         # мягкая отмена: текущий spotdl допишет m3u/save-file, sync-all встанет
         # между плейлистами (а не порвёт файлы на полузаписи).
-        run_spotdl(job, sync_args(pl), kill_on_cancel=False)
+        run_spotdl(job, sync_args(pl, query), kill_on_cancel=False)
 
 
 def _run_sync_playlist(job: Job, pl: playlists.Playlist) -> None:
@@ -495,7 +535,7 @@ def _run_sync_all(job: Job) -> None:
             _sync_locked(job, pl)
         except TimeoutError as e:
             job.append(f"[skip] {pl.name}: {e}")
-        except SpotifyLoginRequired as e:
+        except LikedSongsUnavailable as e:
             job.append(f"[skip] {e}")
 
 

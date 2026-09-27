@@ -100,10 +100,6 @@ FIELDS: List[Field] = [
           choices=["skip", "metadata", "force"],
           labels={"skip": "пропустить", "metadata": "обновить только теги",
                   "force": "перекачать"}),
-    Field("sync_delete", "SYNC_DELETE", "bool", True,
-          "Удалять треки, убранные из плейлиста", G_YT,
-          "При синке spotdl удаляет с диска треки, которых больше нет в плейлисте "
-          "Spotify. Выключите, чтобы файлы оставались."),
     Field("spotdl_threads", "SPOTDL_THREADS", "int", 2,
           "Параллельных загрузок spotdl", G_DL,
           "На каждую загрузку — свой ffmpeg. Больше — быстрее, но выше нагрузка на CPU.", lo=1, hi=8),
