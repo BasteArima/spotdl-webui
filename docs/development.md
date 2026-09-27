@@ -127,11 +127,14 @@ Portainer из секрета `PORTAINER_WEBHOOK`.
   API приложения пользователя и на каждый трек дозапрашивает трек + исполнителя + альбом
   (~3 запроса × сотни треков) — Spotify штрафует dev-приложение 429 с `Retry-After` ~сутки.
   И не список ссылок: `spotdl sync url1 url2 …` разбирает их по одной и последовательно,
-  ~15–25 с на трек (часы до первой загрузки). Liked Songs собираются сами пачками
-  (`spotify_login.saved_songs`: треки по 50, исполнители по 50, альбомы по 20 — ~55
-  запросов на 800 треков) в файл формата spotdl, и идёт `spotdl download <файл>.spotdl`
+  ~15–25 с на трек (часы до первой загрузки). И не пакетные `/artists` + `/albums` ради
+  жанров и лейбла: на них два свежих приложения подряд получили 429 на ~21 ч. Liked Songs
+  собираются только из страниц «Любимых» (`spotify_login.saved_songs`: по 50 с паузой 1 с —
+  ~17 запросов на 800 треков) в файл формата spotdl, и идёт `spotdl download <файл>.spotdl`
   (`jobs.liked_args`): все поля, по которым spotdl решает «дозапросить трек» (genres,
-  disc_count, tracks_count, track_number, album_id, album_artist), заполнены.
+  disc_count, tracks_count, track_number, album_id, album_artist), заполнены (genres —
+  пустым списком). Полученный 429 запоминается в `/conf/.spotify-app-ratelimit.json`: пока
+  штраф идёт, запросы не шлются — иначе автосинк его продлевал бы.
 - **Два формата save-файла.** `sync --save-file` пишет `{"type": "sync", "songs": [...]}`,
   `download --save-file` — список. Читать через `playlists.savefile_songs` (апгрейд раньше
   понимал только список и не видел треков синкнутых плейлистов). Файл-запрос для

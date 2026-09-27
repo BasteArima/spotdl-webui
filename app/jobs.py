@@ -653,8 +653,9 @@ _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def _liked_songs_file(job: Job, pl: playlists.Playlist) -> tuple:
     """Готовит Liked Songs для spotdl: подпроцесс app.spotify_login
-    --saved-songs собирает ВСЕ данные треков от имени пользователя (~55
-    запросов на 800 треков) и пишет их файлом в формате spotdl. Возвращает
+    --saved-songs собирает данные треков из страниц «Любимых» от имени
+    пользователя (~17 запросов на 800 треков) и пишет их файлом в формате
+    spotdl. Возвращает
     (путь, число треков).
 
     Почему не проще:

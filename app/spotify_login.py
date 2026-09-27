@@ -121,9 +121,14 @@ def exchange(code: str) -> dict:
     except SpotifyException as exc:
         if exc.http_status == 429:
             # токен при этом рабочий — не удаляем, просто лимит приложения
+            _remember_ban(cid, exc)
             return {"ok": False, "error": rate_limit_message(exc)}
         return fail(f"Spotify отклонил запрос: {exc}",
                     _HINT_403 if exc.http_status == 403 else "")
+    try:
+        os.remove(_BAN_FILE)     # приложение отвечает — запомненный штраф снят
+    except OSError:
+        pass
     return {"ok": True, "user": me.get("display_name") or me.get("id") or "?", "total": total}
 
 
@@ -142,14 +147,19 @@ def _client(auth_manager):
                    status_forcelist=(500, 502, 503, 504), retries=0, status_retries=0)
 
 
+def _when(wait: int) -> str:
+    if not wait:
+        return ""
+    return (f" Повтор возможен через ~{wait / 3600:.1f} ч." if wait >= 3600
+            else f" Повтор возможен через ~{max(1, wait // 60)} мин.")
+
+
 def rate_limit_message(exc) -> str:
     try:
         wait = int((getattr(exc, "headers", None) or {}).get("Retry-After", 0))
     except (TypeError, ValueError):
         wait = 0
-    when = (f" Повтор возможен через ~{wait / 3600:.1f} ч." if wait >= 3600
-            else f" Повтор возможен через ~{max(1, wait // 60)} мин." if wait else "")
-    return "Spotify временно ограничил запросы вашего приложения (429)." + when
+    return "Spotify временно ограничил запросы вашего приложения (429)." + _when(wait)
 
 
 def _user_oauth():
@@ -161,17 +171,48 @@ def _user_oauth():
                         cache_handler=CacheFileHandler(cache_path=config.SPOTIFY_USER_TOKEN_FILE))
 
 
-def _chunks(items: list, size: int):
-    for i in range(0, len(items), size):
-        yield items[i:i + size]
+# Штраф 429 запоминаем: пока он действует, любой запрос от приложения его
+# только продлевает — автосинк раз в сутки попадал бы в тот же бан.
+_BAN_FILE = os.path.join(config.CONF_DIR, ".spotify-app-ratelimit.json")
 
 
-def _song_dict(track: dict, album: dict, artist: dict) -> dict:
-    """Трек в формате spotdl Song — те же поля и та же логика, что в
-    spotdl Song.from_url. Все поля, по которым spotdl решает «дозапросить
-    трек» (genres, disc_count, tracks_count, track_number, album_id,
-    album_artist), заполнены — иначе он снова пошёл бы в Spotify за каждым."""
-    alb = album or track.get("album") or {}
+def _ban_left(client_id: str) -> int:
+    """Сколько секунд ещё действует запомненный 429 для этого приложения."""
+    try:
+        with open(_BAN_FILE, encoding="utf-8") as fh:
+            ban = json.load(fh)
+    except (OSError, ValueError):
+        return 0
+    if ban.get("client_id") != client_id:
+        return 0          # новое приложение — старый штраф к нему не относится
+    return max(0, int(ban.get("until", 0) - time.time()))
+
+
+def _remember_ban(client_id: str, exc) -> None:
+    try:
+        wait = int((getattr(exc, "headers", None) or {}).get("Retry-After", 0))
+    except (TypeError, ValueError):
+        wait = 0
+    if wait <= 0:
+        return
+    try:
+        with open(_BAN_FILE, "w", encoding="utf-8") as fh:
+            json.dump({"client_id": client_id, "until": int(time.time()) + wait}, fh)
+    except OSError:
+        pass
+
+
+def _song_dict(track: dict, disc_count: int) -> dict:
+    """Трек в формате spotdl Song — те же поля, что в spotdl Song.from_url, но
+    только из ответа «Любимых» (альбом там упрощённый). Все поля, по которым
+    spotdl решает «дозапросить трек» (genres, disc_count, tracks_count,
+    track_number, album_id, album_artist), заполнены: genres — пустой список, а
+    не None, — иначе он снова пошёл бы в Spotify за каждым треком.
+
+    Жанры/лейбл/копирайт требуют полных исполнителей и альбомов — пакетные
+    запросы /artists и /albums dev-приложению дали 429 со штрафом ~сутки
+    (дважды, на свежих приложениях), поэтому без них."""
+    alb = track.get("album") or {}
     release = str(alb.get("release_date") or "")
     try:
         year = int(release[:4])
@@ -179,9 +220,6 @@ def _song_dict(track: dict, album: dict, artist: dict) -> dict:
         year = 0
     images = [i for i in alb.get("images") or [] if i.get("url")]
     cover = max(images, key=lambda i: (i.get("width") or 0) * (i.get("height") or 0))["url"] if images else None
-    items = ((alb.get("tracks") or {}).get("items") or [])
-    disc_count = int(items[-1].get("disc_number") or 1) if items else int(track.get("disc_number") or 1)
-    copyrights = alb.get("copyrights") or []
     artists = track.get("artists") or [{}]
     alb_artists = alb.get("artists") or artists
     return {
@@ -189,7 +227,7 @@ def _song_dict(track: dict, album: dict, artist: dict) -> dict:
         "artists": [a.get("name") or "" for a in artists],
         "artist": artists[0].get("name") or "",
         "artist_id": artists[0].get("id"),
-        "genres": list(alb.get("genres") or []) + list((artist or {}).get("genres") or []),
+        "genres": [],
         "disc_number": track.get("disc_number") or 1,
         "disc_count": disc_count,
         "album_id": alb.get("id"),
@@ -203,61 +241,57 @@ def _song_dict(track: dict, album: dict, artist: dict) -> dict:
         "tracks_count": alb.get("total_tracks") or 1,
         "song_id": track["id"],
         "explicit": bool(track.get("explicit")),
-        "publisher": alb.get("label") or "",
+        "publisher": "",
         "url": (track.get("external_urls") or {}).get("spotify") or f"https://open.spotify.com/track/{track['id']}",
         "isrc": (track.get("external_ids") or {}).get("isrc"),
         "cover_url": cover,
-        "copyright_text": copyrights[0].get("text") if copyrights else None,
+        "copyright_text": None,
         "popularity": track.get("popularity"),
     }
 
 
 def saved_songs() -> dict:
     """Все треки Liked Songs сразу в формате spotdl (для `spotdl download
-    <файл>.spotdl`): список «Любимых» страницами по 50 + исполнители (жанры)
-    пачками по 50 + альбомы (лейбл, копирайт, число дисков) пачками по 20 —
-    ~55 запросов на 800 треков.
+    <файл>.spotdl`): только страницы «Любимых» по 50 — ~17 запросов на 800
+    треков, с паузой между ними.
 
     Зачем: ссылки на треки spotdl разбирает ПО ОДНОЙ и последовательно
     (~15–25 с на трек: 806 треков — часы подготовки до первой загрузки). Из
     готового файла он качает сразу, не делая ни одного запроса за метаданными."""
     from spotipy import SpotifyException
+    cid = app_credentials()[0]
+    left = _ban_left(cid)
+    if left:
+        return {"ok": False, "error": "Spotify ещё держит ограничение 429 для этого приложения — "
+                "запросы не отправлялись, чтобы не продлить его." + _when(left)}
     sp = _client(_user_oauth())
+    tracks, page_no = [], 0
     try:
-        tracks = []
         page = sp.current_user_saved_tracks(limit=50)
         while page:
+            page_no += 1
             for item in page.get("items") or []:
                 t = (item or {}).get("track") or (item or {}).get("item") or {}
                 if t.get("id") and t.get("name") and not t.get("is_local") and t.get("duration_ms"):
                     tracks.append(t)
-            page = sp.next(page) if page.get("next") else None
-
-        artist_ids = sorted({(t.get("artists") or [{}])[0].get("id") for t in tracks} - {None})
-        artists = {}
-        for chunk in _chunks(artist_ids, 50):
-            for a in (sp.artists(chunk) or {}).get("artists") or []:
-                if a:
-                    artists[a["id"]] = a
-            time.sleep(0.1)      # не частим: лимит у dev-приложений строгий
-        album_ids = sorted({(t.get("album") or {}).get("id") for t in tracks} - {None})
-        albums = {}
-        for chunk in _chunks(album_ids, 20):
-            for al in (sp.albums(chunk) or {}).get("albums") or []:
-                if al:
-                    albums[al["id"]] = al
-            time.sleep(0.1)
+            if not page.get("next"):
+                break
+            time.sleep(1)        # не частим: лимит у dev-приложений строгий
+            page = sp.next(page)
     except SpotifyException as exc:
+        where = f" (страница {page_no + 1} списка, получено треков: {len(tracks)})"
         if exc.http_status == 429:
-            return {"ok": False, "error": rate_limit_message(exc)}
-        return {"ok": False, "error": f"Spotify отклонил запрос: {exc}",
+            _remember_ban(cid, exc)
+            return {"ok": False, "error": rate_limit_message(exc) + where}
+        return {"ok": False, "error": f"Spotify отклонил запрос{where}: {exc}",
                 "hint": _HINT_403 if exc.http_status == 403 else ""}
 
-    songs = []
+    # число дисков альбома — по лайкнутым трекам (полный альбом не запрашиваем)
+    discs = {}
     for t in tracks:
-        artist = artists.get((t.get("artists") or [{}])[0].get("id"))
-        album = albums.get((t.get("album") or {}).get("id"))
-        songs.append(_song_dict(t, album, artist))
+        aid = (t.get("album") or {}).get("id")
+        discs[aid] = max(discs.get(aid, 1), int(t.get("disc_number") or 1))
+    songs = [_song_dict(t, discs.get((t.get("album") or {}).get("id"), 1)) for t in tracks]
     return {"ok": True, "songs": songs}
 
 

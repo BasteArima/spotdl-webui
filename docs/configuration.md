@@ -148,6 +148,7 @@
 | `deezer_arl.txt` | Deezer ARL |
 | `zotify_credentials.json` | креды librespot («Spotify напрямую») |
 | `spotify_app.json`, `.spotify-user-token.json` | приложение Spotify и вход для Liked Songs |
+| `.spotify-app-ratelimit.json` | до какого времени Spotify ограничил приложение (429) — запросы до этого срока не шлются |
 | `navidrome.json` | подключение к Navidrome |
 | `.webui-settings.json` | настройки, изменённые в UI |
 | `.webui-auth.json` | хэш пароля и ключ сессий (удалить = задать пароль заново) |
