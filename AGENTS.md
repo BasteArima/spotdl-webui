@@ -101,11 +101,17 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
   (env важнее UI) — своё Spotify-приложение; смена client_id удаляет токен входа; `/conf/.spotify-user-token.json` — OAuth-токен пользователя
   (refresh). `--client-secret` маскируется в логах задач (`jobs._redact`).
 - `/conf/zotify_credentials.json` — креды librespot. Пользователь входит в Spotify
-  **через Facebook** → username/password НЕ работает. Генерация только через **OAuth**:
-  `docker exec -it spotdl-webui python -m app.gen_zotify_creds /conf/zotify_credentials.json`
-  (печатает ссылку → открыть в браузере на ПК → войти через FB → скопировать `code`
-  из redirect-URL `http://127.0.0.1:5588/login?code=…` (страница не загрузится — норма)
-  → вставить в терминал). client_id keymaster `65b708073fc0480ea92a077233ca87bd`.
+  **через Facebook** → username/password НЕ работает. Только **OAuth** (PKCE),
+  client_id keymaster `65b708073fc0480ea92a077233ca87bd`, redirect
+  `http://127.0.0.1:5588/login`. Из UI: «Настройки» → «Spotify напрямую»
+  ([zotify_login.py](app/zotify_login.py)): веб сам генерирует PKCE verifier/challenge
+  и state (в памяти, TTL 15 мин), обмен — подпроцесс `python -m app.zotify_login
+  --exchange` (POST за токеном → публичный `OAuth.ingest_token_response` →
+  `Session.Builder` пишет креды во ВРЕМЕННЫЙ файл → `os.replace` только при успехе).
+  Список scope скопирован из librespot (там приватный). Консольный запасной
+  вариант: `docker exec -it spotdl-webui python -m app.gen_zotify_creds`. Локально
+  librespot не импортируется из-за protobuf — для тестов
+  `PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python`.
 
 ## 6. Настройки ([app/settings.py](app/settings.py))
 
@@ -197,7 +203,8 @@ app/deezer.py        Deezer: ISRC/поиск + скачивание+расшиф
 app/deezer_dl.py     Deezer-фолбэк CLI
 app/place_localfile.py заливка локального файла CLI
 app/resolve_names.py резолв реальных имён со Spotify CLI
-app/gen_zotify_creds.py OAuth-генерация credentials.json (FB-вход)
+app/zotify_login.py  OAuth-вход librespot (PKCE): ссылка, обмен code (--exchange), статус
+app/gen_zotify_creds.py то же из консоли (запасной вариант)
 app/spotify_login.py OAuth-вход для Liked Songs: authorize-URL, обмен code (--exchange), CLI
 app/settings.py      реестр настроек UI (UI→env→дефолт), секреты-файлы, cookies
 app/upgrade.py       Step 2: массовый апгрейд (контроллер + воркер)

@@ -18,7 +18,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, config, errors_parser, health, jobs, playlists, settings, spotify_login, upgrade
+from . import (auth, config, errors_parser, health, jobs, playlists, settings, spotify_login,
+               upgrade, zotify_login)
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 # корень проекта для `python -m app.…` (в контейнере это /app)
@@ -536,6 +537,64 @@ def api_spotify_login_finish(body: SpotifyLoginIn):
 @app.delete("/api/spotify-login", dependencies=[Depends(require_auth)])
 def api_spotify_logout():
     return settings.logout_spotify()
+
+
+# ---- вход librespot / Zotify («Spotify 320k» и апгрейд) ----
+# PKCE-секрет и state попытки — в памяти веба; обмен code — в подпроцессе
+# (librespot не грузим в веб-процесс).
+_ZLOGIN = {"state": "", "verifier": "", "ts": 0.0}
+
+
+@app.get("/api/zotify-creds", dependencies=[Depends(require_auth)])
+def api_zotify_status():
+    return zotify_login.status()
+
+
+@app.post("/api/zotify-login/start", dependencies=[Depends(require_auth)])
+def api_zotify_login_start():
+    _ZLOGIN.update(state=secrets.token_urlsafe(16), verifier=zotify_login.new_verifier(), ts=time.time())
+    return {"url": zotify_login.authorize_url(_ZLOGIN["verifier"], _ZLOGIN["state"]),
+            "redirect_uri": zotify_login.REDIRECT_URI}
+
+
+@app.post("/api/zotify-login/finish", dependencies=[Depends(require_auth)])
+def api_zotify_login_finish(body: SpotifyLoginIn):
+    code, state, error = spotify_login.parse_redirect(body.redirect_url)
+    if error:
+        raise HTTPException(status_code=400, detail=f"Spotify отклонил вход: {error}")
+    if not code:
+        raise HTTPException(status_code=400, detail="В адресе нет code= — скопируйте адрес целиком")
+    if not _ZLOGIN["verifier"] or time.time() - _ZLOGIN["ts"] > _LOGIN_TTL:
+        raise HTTPException(status_code=400, detail="Попытка входа устарела — нажмите «Войти» ещё раз")
+    if state and not hmac.compare_digest(state, _ZLOGIN["state"]):
+        raise HTTPException(status_code=400, detail="Адрес от другой попытки входа — нажмите «Войти» ещё раз")
+    payload = json.dumps({"code": code, "verifier": _ZLOGIN["verifier"]})
+    _ZLOGIN.update(state="", verifier="", ts=0.0)   # code одноразовый — попытка израсходована
+    try:
+        r = subprocess.run([sys.executable, "-m", "app.zotify_login", "--exchange"],
+                           cwd=PROJECT_DIR, input=payload, capture_output=True,
+                           text=True, timeout=90)
+        lines = [ln for ln in (r.stdout or "").splitlines() if ln.strip()]
+        res = json.loads(lines[-1]) if lines else {}
+        if not res:
+            res = {"ok": False, "error": "неожиданный ответ: " + ((r.stderr or "").strip()[-300:] or "пусто")}
+    except subprocess.TimeoutExpired:
+        res = {"ok": False, "error": "Spotify не ответил за 90 с"}
+    except ValueError:
+        res = {"ok": False, "error": "неожиданный ответ: " + ((r.stderr or "").strip()[-300:] or "пусто")}
+    if not res.get("ok"):
+        detail = res.get("error") or "вход не удался"
+        if res.get("hint"):
+            detail += ". " + res["hint"]
+        raise HTTPException(status_code=400, detail=detail)
+    return dict(zotify_login.status(), user=res.get("user") or zotify_login.status()["user"])
+
+
+@app.delete("/api/zotify-creds", dependencies=[Depends(require_auth)])
+def api_zotify_logout():
+    if zotify_login.status()["source"] == "env":
+        raise HTTPException(status_code=400, detail="Задано через env ZOTIFY_USERNAME/PASSWORD — удалить из UI нельзя.")
+    return zotify_login.logout()
 
 
 # ---- массовый апгрейд качества (Step 2) ----

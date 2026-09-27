@@ -165,6 +165,34 @@
       </div>
 
       <div class="card" style="margin-top:16px">
+        <strong>Spotify напрямую (librespot, 320k)</strong>
+        <div class="muted small" style="max-width:640px; margin-top:4px">
+          Вход под вашим аккаунтом Spotify для кнопки «Spotify 320k» и апгрейда библиотеки
+          (320k — с Premium). Можно входить через Facebook. Креды хранятся в
+          <code>/conf/zotify_credentials.json</code> с правами 600.
+        </div>
+        <div id="zt-status" class="small" style="margin-top:10px"></div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn" id="zt-login-start">Войти в Spotify</button>
+          <button class="btn danger" id="zt-logout">Удалить креды</button>
+        </div>
+        <div id="zt-login-steps" style="display:none; margin-top:12px; max-width:640px">
+          <ol class="small steps">
+            <li><a id="zt-login-link" href="#" target="_blank" rel="noopener">Откройте страницу входа Spotify ↗</a>,
+              войдите (можно через Facebook) и разрешите доступ.</li>
+            <li>Браузер откроет <code>127.0.0.1:5588/login?code=…</code> — страница не загрузится, это нормально.
+              Скопируйте адрес из адресной строки и вставьте сюда:</li>
+          </ol>
+          <div class="row">
+            <input id="zt-login-redirect" type="text" autocomplete="off" spellcheck="false"
+                   placeholder="http://127.0.0.1:5588/login?code=…" style="flex:1; min-width:240px">
+            <button class="btn" id="zt-login-finish">Завершить вход</button>
+          </div>
+        </div>
+        <div class="err-msg" id="zt-login-err"></div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
         <strong>Spotify-приложение (для Liked Songs)</strong>
         <div class="muted small" style="max-width:640px; margin-top:4px">
           Нужно, чтобы синхронизировать «Любимые треки» (плейлист со ссылкой <code>saved</code>).

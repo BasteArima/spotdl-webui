@@ -175,7 +175,7 @@ document.querySelectorAll("nav button").forEach(b => {
     if (view === "playlists") loadPlaylists();
     if (view === "upgrade") loadUpgrade();
     if (view === "jobs") loadJobs();
-    if (view === "settings") { renderAccess(); loadSettingsPage(); loadSpotifyApp(); }
+    if (view === "settings") { renderAccess(); loadSettingsPage(); loadZotify(); loadSpotifyApp(); }
   });
 });
 
@@ -399,45 +399,82 @@ function renderSpotifyApp(s) {
   document.getElementById("sp-login-start").className = s.logged_in ? "btn secondary" : "btn";
   document.getElementById("sp-logout").style.display = s.logged_in ? "" : "none";
 }
-function hideLoginSteps() {
-  document.getElementById("sp-login-steps").style.display = "none";
-  document.getElementById("sp-login-redirect").value = "";
+// Общий OAuth-вход «ссылка → вставить адрес 127.0.0.1:…?code= → завершить»
+// (Liked Songs и librespot). Элементы по префиксу: <p>-start, -steps, -link,
+// -redirect, -finish, -err. Ссылкой, а не window.open: после await всплывающее
+// окно режут блокировщики.
+function bindOAuthLogin(p, { startPath, finishPath, hint, onDone }) {
+  const $ = s => document.getElementById(p + "-" + s);
+  const hide = () => { $("steps").style.display = "none"; $("redirect").value = ""; };
+  $("start").addEventListener("click", async () => {
+    $("err").textContent = "";
+    try {
+      const r = await api("POST", startPath);
+      $("link").href = r.url;
+      $("steps").style.display = "";
+      $("link").focus();
+    } catch (e) { $("err").textContent = e.message; }
+  });
+  async function finish() {
+    $("err").textContent = "";
+    if (!$("redirect").value.trim()) { $("err").textContent = "Вставьте адрес страницы " + hint; return; }
+    const btn = $("finish");
+    btn.disabled = true; btn.textContent = "Проверяю…";
+    try {
+      const s = await api("POST", finishPath, { redirect_url: $("redirect").value });
+      hide();
+      onDone(s);
+    } catch (e) { $("err").textContent = e.message; }
+    finally { btn.disabled = false; btn.textContent = "Завершить вход"; }
+  }
+  $("finish").addEventListener("click", finish);
+  $("redirect").addEventListener("keydown", e => { if (e.key === "Enter") finish(); });
+  return { hide };
 }
-document.getElementById("sp-login-start").addEventListener("click", async () => {
-  const errEl = document.getElementById("sp-login-err");
-  errEl.textContent = "";
-  try {
-    const r = await api("POST", "/api/spotify-login/start");
-    // ссылкой, а не window.open: после await всплывающее окно режут блокировщики
-    document.getElementById("sp-login-link").href = r.url;
-    document.getElementById("sp-login-steps").style.display = "";
-    document.getElementById("sp-login-link").focus();
-  } catch (e) { errEl.textContent = e.message; }
-});
-async function finishSpotifyLogin() {
-  const errEl = document.getElementById("sp-login-err");
-  const input = document.getElementById("sp-login-redirect");
-  const btn = document.getElementById("sp-login-finish");
-  errEl.textContent = "";
-  if (!input.value.trim()) { errEl.textContent = "Вставьте адрес страницы 127.0.0.1:9900/?code=…"; return; }
-  btn.disabled = true; btn.textContent = "Проверяю…";
-  try {
-    const s = await api("POST", "/api/spotify-login/finish", { redirect_url: input.value });
-    hideLoginSteps();
+
+const SP_LOGIN = bindOAuthLogin("sp-login", {
+  startPath: "/api/spotify-login/start", finishPath: "/api/spotify-login/finish",
+  hint: "127.0.0.1:9900/?code=…",
+  onDone: s => {
     renderSpotifyApp(s);
     toast("Вход выполнен" + (s.user ? ": " + s.user : "") +
           (s.total != null ? ` · в Liked Songs ${s.total} треков` : ""));
     loadStatus();
-  } catch (e) { errEl.textContent = e.message; }
-  finally { btn.disabled = false; btn.textContent = "Завершить вход"; }
-}
-document.getElementById("sp-login-finish").addEventListener("click", finishSpotifyLogin);
-document.getElementById("sp-login-redirect").addEventListener("keydown", e => { if (e.key === "Enter") finishSpotifyLogin(); });
+  },
+});
 document.getElementById("sp-logout").addEventListener("click", async () => {
   if (!confirm("Выйти из Spotify? Liked Songs перестанут синхронизироваться до нового входа.")) return;
-  try { hideLoginSteps(); renderSpotifyApp(await api("DELETE", "/api/spotify-login")); toast("Вы вышли из Spotify"); loadStatus(); }
+  try { SP_LOGIN.hide(); renderSpotifyApp(await api("DELETE", "/api/spotify-login")); toast("Вы вышли из Spotify"); loadStatus(); }
   catch (e) { document.getElementById("sp-login-err").textContent = e.message; }
 });
+
+// ------------------------------------------------------------------ настройки: librespot / Zotify
+function renderZotify(s) {
+  const st = document.getElementById("zt-status");
+  if (!s.configured) st.innerHTML = '<span class="muted">Вход не выполнен — «Spotify 320k» и апгрейд работать не будут.</span>';
+  else if (s.source === "env") st.innerHTML = "✅ Логин/пароль заданы в env <code>ZOTIFY_USERNAME</code>/<code>ZOTIFY_PASSWORD</code>" +
+    (s.user ? " (<strong>" + esc(s.user) + "</strong>)" : "") + ' — <span class="muted">менять только там.</span>';
+  else st.innerHTML = "✅ Вход выполнен" + (s.user ? " как <strong>" + esc(s.user) + "</strong>" : "");
+  const env = s.source === "env";
+  document.getElementById("zt-login-start").style.display = env ? "none" : "";
+  document.getElementById("zt-login-start").textContent = s.configured ? "Войти заново" : "Войти в Spotify";
+  document.getElementById("zt-login-start").className = s.configured ? "btn secondary" : "btn";
+  document.getElementById("zt-logout").style.display = s.configured && !env ? "" : "none";
+}
+const ZT_LOGIN = bindOAuthLogin("zt-login", {
+  startPath: "/api/zotify-login/start", finishPath: "/api/zotify-login/finish",
+  hint: "127.0.0.1:5588/login?code=…",
+  onDone: s => { renderZotify(s); toast("Вход librespot выполнен" + (s.user ? ": " + s.user : "")); },
+});
+document.getElementById("zt-logout").addEventListener("click", async () => {
+  if (!confirm("Удалить креды librespot? «Spotify 320k» и апгрейд перестанут работать до нового входа.")) return;
+  try { ZT_LOGIN.hide(); renderZotify(await api("DELETE", "/api/zotify-creds")); toast("Креды удалены"); }
+  catch (e) { document.getElementById("zt-login-err").textContent = e.message; }
+});
+async function loadZotify() {
+  try { renderZotify(await api("GET", "/api/zotify-creds")); }
+  catch (e) { document.getElementById("zt-login-err").textContent = e.message; }
+}
 async function loadSpotifyApp() {
   document.getElementById("sp-err").textContent = "";
   try { renderSpotifyApp(await api("GET", "/api/spotify-app")); }

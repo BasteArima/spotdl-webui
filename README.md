@@ -308,17 +308,17 @@ lossless он не даёт). Метаданные/обложку/путь да�
 **Авторизация — через OAuth** (нужен Spotify-аккаунт, для 320k — Premium).
 Подходит и для аккаунтов через Facebook/Google/Apple (у них нет пароля Spotify,
 а username/password Spotify для сторонних клиентов всё равно заблокировал).
-Генерируем переиспользуемый `credentials.json` один раз, прямо на сервере:
+Вход делается один раз во вкладке **«Настройки» → «Spotify напрямую»** → **«Войти в Spotify»**:
 
-```sh
-docker exec -it spotdl-webui python -m app.gen_zotify_creds /conf/zotify_credentials.json
-```
-
-1. Скрипт печатает ссылку — открой её в браузере на ПК и войди в Spotify
-   (кнопка «Continue with Facebook» там есть).
+1. Появится ссылка на страницу входа Spotify — открыть, войти (кнопка «Continue
+   with Facebook» там есть), разрешить доступ.
 2. Браузер откроет `http://127.0.0.1:5588/login?code=...` — страница НЕ загрузится,
-   это нормально. Скопируй значение после `code=` (или весь URL) и вставь в терминал.
-3. Скрипт сохранит `/conf/zotify_credentials.json` — дальше Zotify работает сам.
+   это нормально. Скопировать весь адрес, вставить в поле, «Завершить вход».
+3. Webui сохранит переиспользуемые креды в `/conf/zotify_credentials.json` (права 600)
+   и покажет, под каким аккаунтом вошли. Неудачный повторный вход старые креды не трогает.
+
+Запасной вариант без UI — в консоли сервера (та же схема, адрес вставляется в терминал):
+`docker exec -it spotdl-webui python -m app.gen_zotify_creds /conf/zotify_credentials.json`
 
 > Вариант `ZOTIFY_USERNAME`/`ZOTIFY_PASSWORD` оставлен для аккаунтов с паролем, но
 > для Facebook-входа он не сработает — используй OAuth-генератор выше.
@@ -542,7 +542,8 @@ app/
   librespot_dl.py  общее ядро скачивания трека через librespot (сессия снаружи)
   spotify_dl.py    одноразовое скачивание одного трека (ручные кнопки)
   spotify_worker.py  долгоживущий воркер: ОДНА авторизация librespot на весь апгрейд
-  gen_zotify_creds.py  одноразовая генерация credentials.json через OAuth (FB-вход)
+  zotify_login.py      OAuth-вход librespot: ссылка/PKCE, обмен code (подпроцесс из UI)
+  gen_zotify_creds.py  то же из консоли (запасной вариант)
   spotify_login.py     OAuth-вход для Liked Songs: ссылка входа, обмен code (подпроцесс из UI), CLI
   settings.py      рантайм-настройки (безопасный режим) в /conf, тумблер в UI
   upgrade.py       Step 2: фоновый массовый апгрейд библиотеки до 320k с метками

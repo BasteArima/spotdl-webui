@@ -1,4 +1,6 @@
-"""Генерация credentials.json для Zotify через OAuth (вход в браузере).
+"""Генерация credentials.json для Zotify через OAuth — консольный вариант.
+Обычно то же самое делается из UI («Настройки» → «Spotify напрямую»);
+логика общая — app/zotify_login.py.
 
 Подходит для аккаунтов, входящих через Facebook/Google/Apple (username/password
 у них нет, и Spotify его всё равно блокирует для сторонних клиентов). Авторизация
@@ -11,72 +13,42 @@
 1) Скрипт печатает ссылку — открой её в браузере на своём ПК, войди (в т.ч. через
    Facebook).
 2) После входа браузер откроет адрес http://127.0.0.1:5588/login?code=...
-   Страница НЕ загрузится — это нормально. Скопируй из адресной строки значение
-   после `code=` (или весь URL) и вставь в терминал.
+   Страница НЕ загрузится — это нормально. Скопируй из адресной строки весь адрес
+   (или значение после `code=`) и вставь в терминал.
 3) Скрипт сохранит credentials.json — дальше Zotify работает сам.
 """
-import os
 import sys
-from urllib.parse import parse_qs, urlparse
 
-_REDIRECT = "http://127.0.0.1:5588/login"
+from . import config, zotify_login
+from .spotify_login import parse_redirect
 
 
 def main() -> None:
-    out = sys.argv[1] if len(sys.argv) > 1 else "/conf/zotify_credentials.json"
+    out = sys.argv[1] if len(sys.argv) > 1 else config.ZOTIFY_CREDENTIALS_FILE
+    config.ZOTIFY_CREDENTIALS_FILE = out     # exchange() пишет именно сюда
 
-    from librespot.core import Session
-    from librespot.mercury import MercuryRequests
-    from librespot.oauth import OAuth
-
-    oauth = OAuth(MercuryRequests.keymaster_client_id, _REDIRECT, None)
-    url = oauth.get_auth_url()
-
+    verifier = zotify_login.new_verifier()
     print("\n=== Шаг 1 ===")
     print("Открой эту ссылку в браузере на ПК и войди в Spotify (можно через Facebook):\n")
-    print(url)
+    print(zotify_login.authorize_url(verifier))
     print("\n=== Шаг 2 ===")
-    print("После входа браузер попробует открыть http://127.0.0.1:5588/login?code=...")
-    print("Страница НЕ загрузится — это нормально. Скопируй значение после code= (или весь URL).\n")
+    print(f"После входа браузер попробует открыть {zotify_login.REDIRECT_URI}?code=...")
+    print("Страница НЕ загрузится — это нормально. Скопируй весь адрес (или значение после code=).\n")
 
-    raw = input("Вставь code (или весь redirect-URL) и нажми Enter: ").strip()
-    code = raw
-    if "code=" in raw:
-        code = parse_qs(urlparse(raw).query).get("code", [raw])[0]
-    if not code:
-        print("[error] пустой code", file=sys.stderr)
+    code, _state, error = parse_redirect(input("Вставь адрес (или code) и нажми Enter: "))
+    if error or not code:
+        print(f"[error] {error or 'пустой code'}", file=sys.stderr)
         sys.exit(2)
 
     print("\nПолучаю токен и сохраняю credentials...")
-    oauth.set_code(code).request_token()
-    creds = oauth.get_credentials()
-
-    conf = (Session.Configuration.Builder()
-            .set_store_credentials(True)
-            .set_stored_credential_file(out)
-            .build())
-    builder = Session.Builder(conf)
-    builder.login_credentials = creds
-
-    try:
-        session = builder.create()
-        try:
-            session.close()
-        except Exception:  # noqa: BLE001
-            pass
-    except Exception as exc:  # noqa: BLE001
-        # Сохранение reusable-кред происходит в момент аутентификации (до возможной
-        # ошибки на последующих шагах). Если файл создан — считаем успехом.
-        if not os.path.exists(out):
-            print(f"[error] не удалось авторизоваться: {exc}", file=sys.stderr)
-            sys.exit(1)
-
-    if os.path.exists(out):
-        print(f"\n✅ Готово: {out}")
-        print("Кнопка «Zotify 320k» в UI теперь будет работать.")
-    else:
-        print("[error] credentials.json не создан", file=sys.stderr)
+    res = zotify_login.exchange(code, verifier)
+    if not res["ok"]:
+        print(f"[error] {res['error']}", file=sys.stderr)
+        if res.get("hint"):
+            print(f"        {res['hint']}", file=sys.stderr)
         sys.exit(1)
+    print(f"\n✅ Готово: {out}" + (f" (аккаунт {res['user']})" if res.get("user") else ""))
+    print("Кнопка «Spotify 320k» в UI теперь будет работать.")
 
 
 if __name__ == "__main__":
