@@ -133,6 +133,14 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
   `synced` (добавляется автоматически). Флаги со списком значений (nargs="*")
   идут ПОСЛЕ позиционного запроса — иначе съедят его.
 
+- **Navidrome** ([app/navidrome.py](app/navidrome.py)): любая успешная задача
+  (воркер, `finally`) и каждый трек апгрейда зовут `navidrome.notify_changed()` —
+  это только флаг. Скан (Subsonic `startScan`, токен md5(pass+salt)) запускает
+  `maybe_scan` из тика планировщика (раз в минуту), когда нет активных задач,
+  прошло `QUIET_SECONDS` затишья и минул `min_interval` с прошлого скана.
+  Нужен админ Navidrome; `test()` проверяет `getUser.adminRole`. Подключение:
+  env `NAVIDROME_*` важнее `/conf/navidrome.json`. Без зависимостей (urllib).
+
 ## 7. Очередь задач и апгрейд
 
 - [app/jobs.py](app/jobs.py): две дорожки воркеров — **interactive** (ручные действия)
@@ -210,6 +218,7 @@ app/deezer_dl.py     Deezer-фолбэк CLI
 app/place_localfile.py заливка локального файла CLI
 app/resolve_names.py резолв реальных имён со Spotify CLI
 app/zotify_login.py  OAuth-вход librespot (PKCE): ссылка, обмен code (--exchange), статус
+app/navidrome.py     пересканирование Navidrome после изменений (дебаунс + потолок частоты)
 app/gen_zotify_creds.py то же из консоли (запасной вариант)
 app/spotify_login.py OAuth-вход для Liked Songs: authorize-URL, обмен code (--exchange), CLI
 app/settings.py      реестр настроек UI (UI→env→дефолт), секреты-файлы, cookies

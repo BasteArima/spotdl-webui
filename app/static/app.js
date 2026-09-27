@@ -338,6 +338,57 @@ document.getElementById("dz-clear").addEventListener("click", async () => {
   catch (e) { document.getElementById("dz-err").textContent = e.message; }
 });
 
+// ------------------------------------------------------------------ настройки: Navidrome
+function renderNavidrome(s) {
+  const env = s.source === "env";
+  const url = document.getElementById("nd-url"), user = document.getElementById("nd-user"),
+        pw = document.getElementById("nd-password");
+  url.value = s.url || ""; user.value = s.user || ""; pw.value = "";
+  pw.placeholder = s.has_password ? "сохранён — оставьте пустым, чтобы не менять" : "";
+  url.disabled = user.disabled = pw.disabled = env;
+  document.getElementById("nd-enabled").checked = !!s.enabled;
+  document.getElementById("nd-interval").value = s.min_interval;
+  let st = s.configured
+    ? "✅ Подключение задано" + (env ? ' в env <code>NAVIDROME_*</code> — <span class="muted">адрес и логин менять только там</span>' : "")
+    : '<span class="muted">Не настроено — Navidrome увидит новые треки только по своему расписанию.</span>';
+  if (s.pending) st += ' · <span class="muted">ждёт скана (после затишья в очереди)</span>';
+  const r = s.last_result;
+  if (r) st += `<br>${r.ok ? "Последний скан" : "⚠ Последняя попытка"}: ${esc(new Date(r.ts * 1000).toLocaleString("ru-RU"))}` +
+    `${r.auto ? " (авто)" : ""} — ${esc(r.message)}`;
+  document.getElementById("nd-status").innerHTML = st;
+  document.getElementById("nd-test").disabled = document.getElementById("nd-scan").disabled = !s.configured;
+  document.getElementById("nd-clear").style.display = s.source === "file" ? "" : "none";
+}
+async function ndAction(fn) {
+  const err = document.getElementById("nd-err");
+  err.textContent = "";
+  try { await fn(); } catch (e) { err.textContent = e.message; }
+}
+document.getElementById("nd-save").addEventListener("click", () => ndAction(async () => {
+  renderNavidrome(await api("POST", "/api/navidrome", {
+    url: document.getElementById("nd-url").value, user: document.getElementById("nd-user").value,
+    password: document.getElementById("nd-password").value,
+    enabled: document.getElementById("nd-enabled").checked,
+    min_interval: parseInt(document.getElementById("nd-interval").value, 10),
+  }));
+  toast("Сохранено");
+}));
+document.getElementById("nd-test").addEventListener("click", () => ndAction(async () => {
+  const r = await api("POST", "/api/navidrome/test");
+  if (!r.ok) throw new Error(r.message);
+  toast(`Navidrome ${r.version || ""} на связи` + (r.count != null ? ` · в библиотеке ${r.count} треков` : "") +
+        (r.scanning ? " · сейчас идёт скан" : ""));
+}));
+document.getElementById("nd-scan").addEventListener("click", () => ndAction(async () => {
+  renderNavidrome(await api("POST", "/api/navidrome/scan"));
+  toast("Скан Navidrome запущен");
+}));
+document.getElementById("nd-clear").addEventListener("click", () => ndAction(async () => {
+  if (!confirm("Удалить подключение к Navidrome?")) return;
+  renderNavidrome(await api("DELETE", "/api/navidrome"));
+  toast("Удалено");
+}));
+
 // вся вкладка «Настройки» разом
 async function loadSettingsPage(withSecrets = true) {
   try {
@@ -348,6 +399,7 @@ async function loadSettingsPage(withSecrets = true) {
   if (!withSecrets) return;
   api("GET", "/api/cookies").then(renderCookies).catch(() => {});
   api("GET", "/api/deezer-arl").then(renderDeezer).catch(() => {});
+  api("GET", "/api/navidrome").then(renderNavidrome).catch(() => {});
 }
 
 // ------------------------------------------------------------------ настройки: доступ

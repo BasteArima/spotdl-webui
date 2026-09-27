@@ -134,6 +134,35 @@
       <div id="settings-groups"></div>
 
       <div class="card" style="margin-top:16px">
+        <strong>Navidrome</strong>
+        <div class="muted small" style="max-width:640px; margin-top:4px">
+          После синка, загрузок и апгрейда webui попросит Navidrome пересканировать библиотеку —
+          новые треки появятся сразу, а не по его расписанию. Скан запускается, когда очередь
+          затихнет (пачка загрузок = один скан). Нужен пользователь-<strong>администратор</strong> Navidrome.
+        </div>
+        <div id="nd-status" class="small" style="margin-top:10px"></div>
+        <div class="form-grid">
+          <label for="nd-url">Адрес</label>
+          <input id="nd-url" type="text" autocomplete="off" spellcheck="false" placeholder="http://192.168.1.10:4533">
+          <label for="nd-user">Пользователь</label>
+          <input id="nd-user" type="text" autocomplete="off" spellcheck="false">
+          <label for="nd-password">Пароль</label>
+          <input id="nd-password" type="password" autocomplete="new-password">
+          <label for="nd-enabled">Сканировать автоматически</label>
+          <div><input id="nd-enabled" type="checkbox" class="switch"></div>
+          <label for="nd-interval">Не чаще раза в</label>
+          <div class="set-control"><input id="nd-interval" type="number" min="1" max="1440" step="1"><span class="muted small">мин</span></div>
+        </div>
+        <div class="err-msg" id="nd-err"></div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn" id="nd-save">Сохранить</button>
+          <button class="btn secondary" id="nd-test">Проверить</button>
+          <button class="btn secondary" id="nd-scan">Сканировать сейчас</button>
+          <button class="btn danger" id="nd-clear">Удалить</button>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
         <strong>YouTube cookies</strong>
         <div class="muted small" style="max-width:640px; margin-top:4px">
           Без cookies YouTube на объёме начинает требовать «подтвердите, что вы не робот».

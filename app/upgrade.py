@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 
-from . import config, settings
+from . import config, navidrome, settings
 
 _STATE_FILE = os.path.join(config.CONF_DIR, ".webui-upgraded.json")
 
@@ -125,6 +125,7 @@ class _UpgradeController:
             ok = self._download(url, item["name"])
             with self._lock:
                 if ok:
+                    navidrome.notify_changed()
                     self.upgraded.add(url)
                     self._save()
                     self.stats["done"] += 1

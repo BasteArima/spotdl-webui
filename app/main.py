@@ -18,8 +18,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (auth, config, errors_parser, health, jobs, playlists, settings, spotify_login,
-               upgrade, zotify_login)
+from . import (auth, config, errors_parser, health, jobs, navidrome, playlists, settings,
+               spotify_login, upgrade, zotify_login)
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 # корень проекта для `python -m app.…` (в контейнере это /app)
@@ -430,6 +430,51 @@ def api_clear_deezer_arl():
         return settings.clear_deezer_arl()
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+class NavidromeIn(BaseModel):
+    url: str = ""
+    user: str = ""
+    password: str = ""      # пусто = оставить сохранённый
+    enabled: bool = True
+    min_interval: int = 15
+
+
+@app.get("/api/navidrome", dependencies=[Depends(require_auth)])
+def api_navidrome_status():
+    return navidrome.status()
+
+
+@app.post("/api/navidrome", dependencies=[Depends(require_auth)])
+def api_navidrome_save(body: NavidromeIn):
+    try:
+        return navidrome.save(body.url, body.user, body.password, body.enabled, body.min_interval)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/navidrome", dependencies=[Depends(require_auth)])
+def api_navidrome_clear():
+    try:
+        return navidrome.clear()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/navidrome/test", dependencies=[Depends(require_auth)])
+def api_navidrome_test():
+    try:
+        return navidrome.test()
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/navidrome/scan", dependencies=[Depends(require_auth)])
+def api_navidrome_scan():
+    res = navidrome.scan(auto=False)
+    if not res["ok"]:
+        raise HTTPException(status_code=400, detail=res["message"])
+    return navidrome.status()
 
 
 @app.get("/api/cookies", dependencies=[Depends(require_auth)])

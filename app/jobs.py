@@ -22,7 +22,7 @@ import threading
 import time
 from typing import Callable, Dict, List, Optional
 
-from . import config, errors_parser, playlists, settings
+from . import config, errors_parser, navidrome, playlists, settings
 from .naming import is_saved
 
 # ------------------------------------------------------------------ состояние
@@ -910,6 +910,8 @@ def _worker(lane: str) -> None:
             job.append(f"[exception] {type(e).__name__}: {e}")
         finally:
             job.finished = time.time()
+            if job.status == "done":
+                navidrome.notify_changed()   # скан — позже, когда очередь затихнет
             # Завершённой задаче полный лог больше не нужен: оставляем хвост,
             # чистим вытесненные задачи и отдаём память ОС — иначе сервис
             # держит пик потребления всё время простоя.
@@ -968,6 +970,10 @@ def _scheduler() -> None:
         _autosync_now()
     while True:
         time.sleep(_SCHED_TICK)
+        try:
+            navidrome.maybe_scan(busy=active_count() > 0)
+        except Exception as exc:  # noqa: BLE001 — планировщик не должен умирать
+            print(f"[navidrome] ошибка авто-скана: {exc}", flush=True)
         hours = settings.get("autosync_interval_hours")
         if hours <= 0:
             # выключен: отсчёт «замораживаем», чтобы при включении интервал
