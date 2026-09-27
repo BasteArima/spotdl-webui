@@ -55,14 +55,10 @@ def _next_id() -> str:
 
 
 MAX_LOG_LINES = 4000  # держим в памяти только хвост лога каждой задачи
-# Сколько строк лога оставлять у ЗАВЕРШЁННОЙ задачи. У живой лог нужен целиком,
-# у завершённой интересен хвост с ошибкой — иначе сотни задач × тысячи строк
-# висят в памяти всё время простоя сервиса.
-FINISHED_LOG_LINES = 300
-# Сколько завершённых задач держать в реестре. Раньше реестр рос бесконечно
-# (удаление было только вручную из UI) — на пакетных загрузках это главная
-# утечка памяти и лишняя работа на каждом опросе /api/jobs.
-MAX_FINISHED_JOBS = 400
+# Ретеншен завершённых задач — настройки «Сервис» (jobs_history, finished_log_lines).
+# Раньше реестр рос бесконечно (удаление было только вручную из UI) — на пакетных
+# загрузках это главная утечка памяти и лишняя работа на каждом опросе /api/jobs.
+# У завершённой задачи интересен хвост лога с ошибкой, не тысячи строк.
 _FINISHED = ("done", "error", "cancelled")
 
 # Дорожки воркеров: интерактивная (ручные действия) и фоновая (тяжёлый автосинк).
@@ -162,7 +158,7 @@ def _malloc_trim() -> None:
 
 
 def _prune_finished_locked() -> int:
-    """Вытеснить самые старые завершённые задачи сверх MAX_FINISHED_JOBS.
+    """Вытеснить самые старые завершённые задачи сверх настройки jobs_history.
 
     Задачи из ещё АКТИВНЫХ групп (пакетная загрузка плейлиста, у которой что-то
     в очереди/идёт) не трогаем — иначе у группы поехал бы прогресс X/Y.
@@ -172,7 +168,7 @@ def _prune_finished_locked() -> int:
     finished = [jid for jid in _jobs_order
                 if _jobs[jid].status in _FINISHED
                 and _jobs[jid].title not in active_titles]
-    excess = len(finished) - MAX_FINISHED_JOBS
+    excess = len(finished) - settings.get("jobs_history")
     if excess <= 0:
         return 0
     drop = set(finished[:excess])
@@ -385,11 +381,30 @@ def run_spotdl(job: Job, args: List[str], timeout: Optional[float] = None,
                         timeout=timeout, kill_on_cancel=kill_on_cancel)
 
 
+def _lyrics_args() -> List[str]:
+    """--lyrics/--generate-lrc. .lrc требует провайдера `synced` — добавляем его
+    первым, если пользователь включил .lrc. Пустой `--lyrics` = не искать тексты."""
+    mode = settings.get("lyrics_providers")
+    providers = [] if mode == "off" else mode.split(",")
+    args = []
+    if settings.get("generate_lrc"):
+        if "synced" not in providers:
+            providers.insert(0, "synced")
+        args.append("--generate-lrc")
+    return ["--lyrics", *providers] + args
+
+
 def _common_output_args() -> List[str]:
+    # Качество/поиск для YouTube раньше не передавались → spotdl брал свои
+    # умолчания (в т.ч. mp3 128k). Теперь — из вкладки «Настройки».
     return [
         "--cookie-file", config.COOKIE_FILE,
         "--output", config.OUTPUT_TEMPLATE,
         "--format", config.AUDIO_FORMAT,
+        "--bitrate", settings.get("youtube_bitrate"),
+        "--audio", *settings.get("audio_providers").split(","),
+        *_lyrics_args(),
+        "--overwrite", settings.get("overwrite"),
         "--simple-tui",
         "--log-level", "INFO",
         "--threads", str(settings.get("spotdl_threads")),
@@ -425,6 +440,8 @@ def sync_args(pl: playlists.Playlist) -> List[str]:
         "--save-errors", config.errors_path(pl.safe),
         "--m3u", config.m3u_path(pl.safe),
     ] + _common_output_args()
+    if not settings.get("sync_delete"):
+        args.append("--sync-without-deleting")
     if is_saved(pl.url):
         args += _user_auth_args()
     return args
@@ -896,7 +913,7 @@ def _worker(lane: str) -> None:
             # Завершённой задаче полный лог больше не нужен: оставляем хвост,
             # чистим вытесненные задачи и отдаём память ОС — иначе сервис
             # держит пик потребления всё время простоя.
-            job.trim_log(FINISHED_LOG_LINES)
+            job.trim_log(settings.get("finished_log_lines"))
             with _jobs_lock:
                 _prune_finished_locked()
             _bump_rev()
@@ -947,7 +964,7 @@ def _scheduler() -> None:
     global _last_autosync
     # «при старте» — только если автосинк вообще включён (интервал 0 = выключен совсем)
     if settings.get("autosync_on_start") and settings.get("autosync_interval_hours") > 0:
-        time.sleep(max(0.0, config.AUTOSYNC_START_DELAY))
+        time.sleep(max(0, settings.get("autosync_start_delay")))
         _autosync_now()
     while True:
         time.sleep(_SCHED_TICK)

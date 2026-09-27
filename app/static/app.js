@@ -187,6 +187,7 @@ let SETTINGS_SCHEMA = [];
 
 function fmtSetting(f, v) {
   if (f.kind === "bool") return v ? "вкл" : "выкл";
+  if (f.kind === "choice") return (f.labels && f.labels[v]) || String(v);
   return String(v) + (f.unit ? " " + f.unit : "");
 }
 function fmtWhen(ts) {
@@ -203,7 +204,8 @@ function settingControl(f) {
     input = el("input", { type: "checkbox", class: "switch", "data-key": f.key });
     input.checked = !!f.value;
   } else if (f.kind === "choice") {
-    input = el("select", { "data-key": f.key }, f.choices.map(c => el("option", { value: c }, [c])));
+    input = el("select", { "data-key": f.key },
+      f.choices.map(c => el("option", { value: c }, [(f.labels && f.labels[c]) || c])));
     input.value = f.value;
   } else {
     input = el("input", { type: "number", "data-key": f.key, step: f.kind === "float" ? "any" : "1" });

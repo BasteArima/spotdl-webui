@@ -27,10 +27,11 @@ class Field:
 
     def __init__(self, key: str, env: str, kind: str, default: Any, label: str,
                  group: str, help: str = "", lo: float = None, hi: float = None,
-                 choices: List[str] = None, unit: str = ""):
+                 choices: List[str] = None, unit: str = "", labels: Dict[str, str] = None):
         self.key, self.env, self.kind, self.default = key, env, kind, default
         self.label, self.group, self.help, self.unit = label, group, help, unit
         self.lo, self.hi, self.choices = lo, hi, choices
+        self.labels = labels or {}      # подписи вариантов choice для UI
 
     def parse(self, raw: Any) -> Any:
         """Привести значение (из json UI или строки env) к типу; ValueError — если нельзя."""
@@ -57,7 +58,8 @@ class Field:
         return v
 
 
-G_SYNC, G_DL, G_SP, G_UPG = "Автосинк", "Загрузка", "Spotify (librespot)", "Апгрейд 320k"
+G_SYNC, G_YT, G_DL, G_SP, G_UPG, G_SVC = ("Автосинк", "YouTube (spotdl)", "Загрузка",
+                                         "Spotify (librespot)", "Апгрейд 320k", "Сервис")
 FIELDS: List[Field] = [
     Field("autosync_interval_hours", "AUTOSYNC_INTERVAL_HOURS", "float", 24.0,
           "Интервал автосинка", G_SYNC, "Синхронизация всех плейлистов по расписанию. 0 — выключить.",
@@ -66,11 +68,49 @@ FIELDS: List[Field] = [
           "Автосинк после старта контейнера", G_SYNC,
           "Один синк всех плейлистов вскоре после запуска, если автосинк включён "
           "(действует со следующего старта)."),
+    Field("autosync_start_delay", "AUTOSYNC_START_DELAY", "int", 20,
+          "Задержка автосинка после старта", G_SYNC, "Чтобы веб успел подняться.",
+          lo=0, hi=3600, unit="с"),
+    # --- параметры spotdl для YouTube (раньше не передавались → умолчания spotdl)
+    Field("youtube_bitrate", "YOUTUBE_BITRATE", "choice", "auto",
+          "Битрейт mp3 с YouTube", G_YT,
+          "YouTube отдаёт звук ~128–160k: «как у источника» не пережимает лишний раз. "
+          "Раньше было 128k — умолчание spotdl.",
+          choices=["auto", "128k", "160k", "192k", "256k", "320k"],
+          labels={"auto": "как у источника (auto)"}),
+    Field("audio_providers", "AUDIO_PROVIDERS", "choice", "youtube-music",
+          "Где искать аудио", G_YT, "Порядок = приоритет; второй источник — запасной.",
+          choices=["youtube-music", "youtube", "youtube-music,youtube"],
+          labels={"youtube-music": "YouTube Music", "youtube": "YouTube",
+                  "youtube-music,youtube": "YouTube Music, затем YouTube"}),
+    Field("lyrics_providers", "LYRICS_PROVIDERS", "choice", "genius,azlyrics,musixmatch",
+          "Тексты песен", G_YT,
+          "Вшиваются в теги. Синхронизированные (с таймкодами) показывает Navidrome, "
+          "но не все плееры.",
+          choices=["genius,azlyrics,musixmatch", "synced,musixmatch,genius", "off"],
+          labels={"genius,azlyrics,musixmatch": "обычные (Genius, AZLyrics, Musixmatch)",
+                  "synced,musixmatch,genius": "синхронизированные, иначе обычные",
+                  "off": "не искать"}),
+    Field("generate_lrc", "GENERATE_LRC", "bool", False,
+          "Файлы .lrc рядом с треками", G_YT,
+          "Отдельный файл с синхронизированным текстом (Navidrome его подхватывает). "
+          "Включает поиск синхронизированных текстов."),
+    Field("overwrite", "OVERWRITE", "choice", "skip",
+          "Если файл уже скачан", G_YT, "Для sync и скачивания с YouTube.",
+          choices=["skip", "metadata", "force"],
+          labels={"skip": "пропустить", "metadata": "обновить только теги",
+                  "force": "перекачать"}),
+    Field("sync_delete", "SYNC_DELETE", "bool", True,
+          "Удалять треки, убранные из плейлиста", G_YT,
+          "При синке spotdl удаляет с диска треки, которых больше нет в плейлисте "
+          "Spotify. Выключите, чтобы файлы оставались."),
     Field("spotdl_threads", "SPOTDL_THREADS", "int", 2,
           "Параллельных загрузок spotdl", G_DL,
           "На каждую загрузку — свой ffmpeg. Больше — быстрее, но выше нагрузка на CPU.", lo=1, hi=8),
     Field("upload_bitrate", "UPLOAD_BITRATE", "choice", "320k",
-          "Битрейт mp3", G_DL, "Для заливки файлов, Deezer и Spotify-загрузок. 320k — максимум Spotify.",
+          "Битрейт mp3 (заливка, Deezer, Spotify)", G_DL,
+          "Для заливки файлов, Deezer и Spotify-загрузок. 320k — максимум Spotify. "
+          "Для YouTube — отдельная настройка выше.",
           choices=["128k", "192k", "256k", "320k", "auto"]),
     Field("download_track_timeout", "DOWNLOAD_TRACK_TIMEOUT", "int", 3600,
           "Таймаут на один трек", G_DL,
@@ -95,6 +135,16 @@ FIELDS: List[Field] = [
           "Лимит апгрейда в сутки", G_UPG, "Анти-бан. 0 — без лимита (только паузы).", lo=0, hi=100000),
     Field("upgrade_track_timeout", "UPGRADE_TRACK_TIMEOUT", "int", 1200,
           "Таймаут апгрейда на трек", G_UPG, "Потом воркер перезапускается.", lo=60, hi=86400, unit="с"),
+    Field("jobs_history", "JOBS_HISTORY", "int", 400,
+          "Хранить завершённых задач", G_SVC,
+          "Старые вытесняются (задачи активной пакетной загрузки — нет). Больше — больше памяти.",
+          lo=20, hi=5000),
+    Field("finished_log_lines", "FINISHED_LOG_LINES", "int", 300,
+          "Строк лога у завершённой задачи", G_SVC,
+          "Хвост с ошибкой; полный вывод всегда есть в docker logs.", lo=20, hi=4000),
+    Field("session_ttl_days", "SESSION_TTL_DAYS", "int", 30,
+          "Срок жизни входа", G_SVC, "Сколько дней браузер остаётся залогиненным. "
+          "Действует на новые входы.", lo=1, hi=365, unit="дн"),
 ]
 _BY_KEY: Dict[str, Field] = {f.key: f for f in FIELDS}
 
@@ -175,7 +225,8 @@ def schema() -> List[dict]:
         env_v = _env_value(f)
         out.append({
             "key": f.key, "label": f.label, "group": f.group, "help": f.help,
-            "kind": f.kind, "choices": f.choices, "lo": f.lo, "hi": f.hi, "unit": f.unit,
+            "kind": f.kind, "choices": f.choices, "labels": f.labels,
+            "lo": f.lo, "hi": f.hi, "unit": f.unit,
             "value": get(f.key),
             "default": f.default if env_v is None else env_v,
             "default_source": "env" if env_v is not None else "builtin",
@@ -235,7 +286,6 @@ def system_info() -> List[dict]:
         {"env": "CONF_DIR", "value": config.CONF_DIR, "help": ""},
         {"env": "PUID:PGID", "value": f"{os.environ.get('PUID', '998')}:{os.environ.get('PGID', '100')}",
          "help": "Под этим uid:gid пишутся файлы (как у Navidrome)"},
-        {"env": "AUTOSYNC_START_DELAY", "value": f"{config.AUTOSYNC_START_DELAY:g} с", "help": ""},
         {"env": "AUTH_ENABLED", "value": "да" if config.AUTH_ENABLED else "нет", "help": ""},
     ]
 

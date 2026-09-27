@@ -209,8 +209,15 @@ IP вход блокируется на 10 минут.
 |-----------|--------------|----------|
 | `AUTOSYNC_INTERVAL_HOURS` | `24` | Период фонового автосинка (sync всех плейлистов). `0` — выключить. Смена в UI действует сразу. |
 | `AUTOSYNC_ON_START` | `true` | Один автосинк вскоре после старта контейнера (если автосинк включён). |
+| `AUTOSYNC_START_DELAY` | `20` | Задержка (с) перед автосинком после старта. |
+| `YOUTUBE_BITRATE` | `auto` | Битрейт mp3 для загрузок с YouTube: `auto` (как у источника, ~128–160k), `128k`…`320k`. Раньше не передавался — spotdl кодировал в 128k. |
+| `AUDIO_PROVIDERS` | `youtube-music` | Где искать аудио: `youtube-music`, `youtube` или `youtube-music,youtube` (второй — запасной). |
+| `LYRICS_PROVIDERS` | `genius,azlyrics,musixmatch` | Тексты песен в тегах: обычные, `synced,musixmatch,genius` (синхронизированные, иначе обычные) или `off`. |
+| `GENERATE_LRC` | `false` | Класть рядом с треком `.lrc` с синхронизированным текстом (Navidrome подхватывает). |
+| `OVERWRITE` | `skip` | Если файл уже скачан: `skip` — пропустить, `metadata` — обновить теги, `force` — перекачать. |
+| `SYNC_DELETE` | `true` | Удалять при синке треки, убранные из плейлиста Spotify. `false` — оставлять файлы. |
 | `SPOTDL_THREADS` | `2` | Сколько загрузок spotdl тянет параллельно. На каждую завершённую запускается ffmpeg, поэтому дефолтные для spotdl `4` забивают все ядра слабого NAS. |
-| `UPLOAD_BITRATE` | `320k` | Битрейт mp3 (заливка, Deezer, Spotify). `128k`/`192k`/`256k`/`320k`/`auto`. |
+| `UPLOAD_BITRATE` | `320k` | Битрейт mp3 для заливки, Deezer и Spotify (для YouTube — `YOUTUBE_BITRATE`). `128k`/`192k`/`256k`/`320k`/`auto`. |
 | `DOWNLOAD_TRACK_TIMEOUT` | `3600` | Таймаут (с) на одну загрузку трека; зависшую убьёт сторож. `0` — без таймаута. |
 | `ZOTIFY_QUALITY` | `very_high` | Качество Spotify: `very_high`=320k (нужен Premium), `high`=160k, `normal`=96k. |
 | `ZOTIFY_SAFE_MODE` | `true` | Безопасный режим: одиночные «Spotify 320k» в **real-time** (скорость прослушивания, анти-бан). Массовая закачка и апгрейд — всегда real-time. Тумблер и в шапке. |
@@ -218,6 +225,9 @@ IP вход блокируется на 10 минут.
 | `UPGRADE_MIN_BITRATE` | `300` | Апгрейд пропускает файлы, у которых битрейт уже ≥ этого (kbps). |
 | `UPGRADE_PER_DAY` | `0` | Лимит апгрейд-загрузок в сутки (анти-бан). `0` = без лимита. |
 | `UPGRADE_TRACK_TIMEOUT` | `1200` | Таймаут (с) апгрейда одного трека, потом воркер перезапускается. |
+| `JOBS_HISTORY` | `400` | Сколько завершённых задач хранить в памяти (старые вытесняются). |
+| `FINISHED_LOG_LINES` | `300` | Сколько строк лога оставлять у завершённой задачи (полный — в `docker logs`). |
+| `SESSION_TTL_DAYS` | `30` | Сколько дней браузер остаётся залогиненным (для новых входов). |
 
 ### Секреты (env важнее UI)
 
@@ -238,7 +248,6 @@ YouTube cookies загружаются файлом в «Настройках» 
 | `CONF_DIR` / `MUSIC_DIR` | `/conf` / `/music` | Корни данных spotdl и музыки. |
 | `OUTPUT_TEMPLATE` | `…/{album-artist}/{album}/{track-number} - {title}.{output-ext}` | Шаблон вывода spotdl (должен совпадать с уже скачанной библиотекой). |
 | `AUDIO_FORMAT` | `mp3` | Формат загрузки. |
-| `AUTOSYNC_START_DELAY` | `20` | Задержка (с) перед автосинком после старта. |
 | `ZOTIFY_CREDENTIALS_FILE` | `/conf/zotify_credentials.json` | Путь к credentials.json librespot. |
 | `SPOTIFY_USER_TOKEN_FILE` | `/conf/.spotify-user-token.json` | OAuth-токен пользователя для Liked Songs. |
 

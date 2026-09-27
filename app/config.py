@@ -103,17 +103,6 @@ def zotify_configured() -> bool:
     return bool(ZOTIFY_USERNAME.strip() and ZOTIFY_PASSWORD.strip())
 
 
-def _env_float(name: str, default: float) -> float:
-    try:
-        return float(os.environ.get(name, default))
-    except (TypeError, ValueError):
-        return default
-
-
-# Фоновый автосинк: интервал и «при старте» — в app/settings.py (меняются из UI).
-# Задержка перед первым автосинком после старта (сек), чтобы веб успел подняться.
-AUTOSYNC_START_DELAY = _env_float("AUTOSYNC_START_DELAY", 20.0)
-
 # m3u-расширение, которое пишет автосинк
 M3U_EXT = os.environ.get("M3U_EXT", "m3u8")
 

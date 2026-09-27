@@ -25,13 +25,12 @@ import tempfile
 import threading
 import time
 
-from . import config
+from . import config, settings
 
 _PATH = os.path.join(config.CONF_DIR, ".webui-auth.json")
 _lock = threading.Lock()
 _cache = None
 
-SESSION_TTL = 30 * 24 * 3600          # сессия живёт 30 дней
 MIN_PASSWORD_LEN = 6
 _PBKDF2_ITERS = 240_000
 
@@ -165,7 +164,8 @@ def _sign(payload: str) -> str:
 
 
 def issue_token() -> str:
-    payload = f"v1.{int(time.time()) + SESSION_TTL}"
+    # срок жизни — из настроек («Сервис»); уже выданные токены живут по старому сроку
+    payload = f"v1.{int(time.time()) + settings.get('session_ttl_days') * 86400}"
     return f"{payload}.{_sign(payload)}"
 
 

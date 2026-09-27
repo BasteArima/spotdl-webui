@@ -126,6 +126,12 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
   автосинка сверяется с настройками раз в минуту. Подпроцессы (librespot_dl и
   т.п.) читают тот же json сами.
 - Только-env (пути, шаблон, PUID/PGID) — в UI read-only (`settings.system_info`).
+- Параметры spotdl для YouTube (`--bitrate`, `--audio`, `--lyrics`/`--generate-lrc`,
+  `--overwrite`, `--sync-without-deleting`) собираются в `jobs._common_output_args`
+  / `sync_args` из настроек. Раньше не передавались вовсе → spotdl кодировал в
+  128k. `--lyrics` без значений = не искать тексты; `.lrc` требует провайдера
+  `synced` (добавляется автоматически). Флаги со списком значений (nargs="*")
+  идут ПОСЛЕ позиционного запроса — иначе съедят его.
 
 ## 7. Очередь задач и апгрейд
 
