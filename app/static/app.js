@@ -174,7 +174,7 @@ document.querySelectorAll("nav button").forEach(b => {
     if (view === "errors") loadErrors();
     if (view === "playlists") loadPlaylists();
     if (view === "upgrade") loadUpgrade();
-    if (view === "jobs") loadJobs();
+    if (view === "jobs") pollTasks();
     if (view === "settings") { renderAccess(); loadSettingsPage(); loadZotify(); loadSpotifyApp(); }
   });
 });
@@ -761,7 +761,7 @@ async function enqueueDownloads(rows) {
     });
     toast(`В очередь: ${(data.downloads || []).length} трек(ов)` +
           ((data.syncs || []).length ? `, обновление m3u: ${data.syncs.length}` : ""));
-    showTasks();
+
     pollTasks();
   } catch (e) { toast("Ошибка: " + e.message); }
 }
@@ -776,7 +776,7 @@ async function trySource(row, endpoint, label, extra, quiet) {
     row.jobId = data.job.id;
     PENDING.set(data.job.id, row);
     setRowState(row, "queued", { jobId: data.job.id });
-    if (!quiet) { toast(`Попытка ${label} в очереди`); showTasks(); pollTasks(); }
+    if (!quiet) { toast(`Попытка ${label} в очереди`); pollTasks(); }
   } catch (e) {
     setRowState(row, "error");
     if (!quiet) toast(`${label}: ${e.message}`);
@@ -801,7 +801,7 @@ async function uploadFile(row, file) {
     PENDING.set(data.job.id, row);
     setRowState(row, "queued", { jobId: data.job.id });
     toast("Файл «" + file.name + "» в очереди");
-    showTasks(); pollTasks();
+    pollTasks();
   } catch (e) {
     setRowState(row, "error");
     toast("Ошибка заливки: " + e.message);
@@ -830,41 +830,133 @@ function bulkDownload(rows) {
   const extra = mode === "spotify" ? { bulk: true } : {};
   rows.forEach(r => trySource(r, endpoint, label, extra, true));  // quiet — один тост ниже
   toast(`В очередь: ${rows.length} трек(ов) через ${label}`);
-  showTasks(); pollTasks();
+  pollTasks();
 }
 
-// ------------------------------------------------------------------ плейлисты
+// ------------------------------------------------------------------ плейлисты (карточки)
+// Карточка = плейлист + его состояние: идёт синк (прогресс), в очереди, сколько
+// треков, сколько не найдено (ссылка сразу на добивание), когда синкался.
+// Живой статус приходит из общего опроса (/api/jobs → syncs), сводка — из /api/playlists.
 let EDIT_URL = null;
+let PLAYLISTS = [];
+const PL_NODES = new Map();   // playlist_id -> {card, chip, live, meta, syncBtn}
+
+const PL_ICON = { saved: "♥", playlist: "♫", album: "◉", artist: "★", track: "♪" };
+
 async function loadPlaylists() {
   try {
     const data = await api("GET", "/api/playlists");
-    const tb = document.querySelector("#pl-table tbody");
-    tb.innerHTML = "";
-    (data.playlists || []).forEach(p => {
-      const editBtn = el("button", { class: "btn secondary small" }, ["✎"]);
-      editBtn.addEventListener("click", () => openPlModal(p));
-      const delBtn = el("button", { class: "btn danger small" }, ["🗑"]);
-      delBtn.addEventListener("click", () => deletePlaylist(p));
-      const syncBtn = el("button", { class: "btn small" }, ["Sync"]);
-      syncBtn.addEventListener("click", () => syncPlaylist(p, syncBtn));
-      tb.appendChild(el("tr", {}, [
-        el("td", {}, [p.name]),
-        el("td", {}, [el("span", { class: "tag " + p.type }, [p.type])]),
-        // у Liked Songs (`saved`) ссылки нет — ведём на коллекцию в веб-плеере
-        el("td", {}, [el("a", { href: p.type === "saved" ? "https://open.spotify.com/collection/tracks" : p.url,
-                                target: "_blank", rel: "noopener", class: "small pl-url", title: p.url }, [p.url])]),
-        el("td", {}, [el("div", { class: "pl-actions" }, [syncBtn, editBtn, delBtn])]),
-      ]));
-    });
+    PLAYLISTS = data.playlists || [];
+    renderPlaylistCards();
   } catch (e) { toast("Ошибка: " + e.message); }
+}
+
+function renderPlaylistCards() {
+  const box = document.getElementById("pl-cards");
+  box.innerHTML = "";
+  PL_NODES.clear();
+  if (!PLAYLISTS.length) {
+    box.appendChild(el("div", { class: "card empty-state" }, [
+      el("strong", {}, ["Добавьте первый плейлист"]),
+      el("div", { class: "muted small", style: "margin-top:4px" },
+        ["Ссылка на плейлист, альбом или исполнителя Spotify — или saved для «Любимых треков»."]),
+    ]));
+    return;
+  }
+  PLAYLISTS.forEach(p => {
+    const chip = el("span", { class: "chip" }, [""]);
+    const syncBtn = el("button", { class: "btn small" }, ["⟳ Синк"]);
+    syncBtn.addEventListener("click", () => syncPlaylist(p, syncBtn));
+    const editBtn = el("button", { class: "btn secondary small", title: "Изменить" }, ["✎"]);
+    editBtn.addEventListener("click", () => openPlModal(p));
+    const delBtn = el("button", { class: "btn secondary small", title: "Удалить из списка" }, ["🗑"]);
+    delBtn.addEventListener("click", () => deletePlaylist(p));
+    // у Liked Songs (`saved`) ссылки нет — ведём на коллекцию в веб-плеере
+    const href = p.type === "saved" ? "https://open.spotify.com/collection/tracks" : p.url;
+    const name = el("a", { class: "pl-name", href, target: "_blank", rel: "noopener", title: "Открыть в Spotify" }, [p.name]);
+    const live = el("div", { class: "pl-live" });
+    const meta = el("div", { class: "pl-meta muted small" });
+    const card = el("div", { class: "card pl-card" }, [
+      el("div", { class: "pl-head" }, [
+        el("span", { class: "pl-icon", "aria-hidden": "true" }, [PL_ICON[p.type] || "♫"]),
+        name, chip,
+        el("div", { class: "pl-actions" }, [syncBtn, editBtn, delBtn]),
+      ]),
+      live, meta,
+    ]);
+    box.appendChild(card);
+    PL_NODES.set(p.id, { card, chip, live, meta, syncBtn, p });
+  });
+  updatePlaylistLive(LIVE_SYNCS);
+}
+
+// Живое состояние карточек (вызывается на каждом опросе).
+function updatePlaylistLive(syncs) {
+  for (const [id, n] of PL_NODES) {
+    const s = syncs[id];
+    const p = n.p;
+    const prog = s && s.progress;
+    let chipText = "", chipCls = "";
+    if (s && s.status === "running") {
+      const pct = prog && prog.total && prog.phase === "download" ? Math.round(prog.processed / prog.total * 100) : null;
+      chipText = pct != null ? `синк ${pct}%` : "синк…";
+      chipCls = "accent";
+    } else if (s && s.status === "queued") {
+      chipText = "в очереди"; chipCls = "muted";
+    } else if (p.not_found) {
+      chipText = `${p.not_found} не найдено`; chipCls = "warn";
+    } else if (p.last_sync) {
+      chipText = p.last_sync.ok ? "готово" : "ошибка синка"; chipCls = p.last_sync.ok ? "ok" : "danger";
+    } else {
+      chipText = "не синхронизирован"; chipCls = "muted";
+    }
+    n.chip.textContent = chipText;
+    n.chip.className = "chip " + chipCls;
+    n.syncBtn.disabled = !!s;
+    n.card.classList.toggle("syncing", !!(s && s.status === "running"));
+
+    // строка прогресса — только пока идёт синк этого плейлиста
+    n.live.innerHTML = "";
+    if (s && s.status === "running" && prog) {
+      n.live.appendChild(progressBar(prog.phase === "download" ? prog.processed : null, prog.total));
+      n.live.appendChild(el("div", { class: "muted small" }, [syncDetail(prog)]));
+    }
+
+    // сводка
+    n.meta.innerHTML = "";
+    const parts = [];
+    if (p.tracks != null) parts.push(`${p.tracks} ${plural(p.tracks, "трек", "трека", "треков")}`);
+    if (p.last_sync) {
+      let t = "синк " + fmtAgo(p.last_sync.ts);
+      if (p.last_sync.downloaded) t += `, +${p.last_sync.downloaded}`;
+      parts.push(t);
+    } else if (p.tracks == null && !(s && s.status === "running")) {
+      parts.push("ещё не синхронизировался");
+    }
+    n.meta.appendChild(document.createTextNode(parts.join(" · ")));
+    if (p.not_found) {
+      const a = el("a", { href: "#" }, [`добить ${p.not_found} →`]);
+      a.addEventListener("click", (e) => { e.preventDefault(); openErrorsFor(p.safe); });
+      if (parts.length) n.meta.appendChild(document.createTextNode(" · "));
+      n.meta.appendChild(a);
+    }
+  }
+}
+
+async function openErrorsFor(safe) {
+  switchView("errors");
+  await loadErrors();
+  const sel = document.getElementById("err-playlist-filter");
+  sel.value = safe;
+  renderErrors();
 }
 
 async function syncPlaylist(p, btn) {
   btn.disabled = true;
-  try { await api("POST", "/api/sync", { url: p.url }); toast("Синхронизация в очереди"); showTasks(); pollTasks(); }
-  catch (e) { toast("Ошибка: " + e.message); }
-  finally { btn.disabled = false; }
+  try { await api("POST", "/api/sync", { url: p.url }); toast("Синхронизация в очереди"); pollTasks(); }
+  catch (e) { toast("Ошибка: " + e.message); btn.disabled = false; }
 }
+
 async function deletePlaylist(p) {
   if (!confirm("Удалить «" + p.name + "» из playlists.txt?")) return;
   try { await api("DELETE", "/api/playlists", { url: p.url }); loadPlaylists(); toast("Удалено"); }
@@ -892,72 +984,6 @@ document.getElementById("pl-modal-save").addEventListener("click", async () => {
     else await api("POST", "/api/playlists", { name, url });
     closePlModal(); loadPlaylists(); toast("Сохранено");
   } catch (e) { errEl.textContent = e.message; }
-});
-
-// ------------------------------------------------------------------ вкладка «Задачи»
-// вкладка «Задачи»: тянем БОЛЬШЕ задач (видеть всю очередь), скролл + клиентская сортировка.
-let JOBS_CACHE = [];
-let JOBS_SORT = { col: null, dir: 1 };           // col: title|status; dir: 1/-1
-const STATUS_RANK = { running: 0, queued: 1, done: 2, cancelled: 3, error: 4 };
-function _jobSortKey(j, col) {
-  if (col === "status") return [STATUS_RANK[j.status] != null ? STATUS_RANK[j.status] : 9, j.queue_pos || 0];
-  return [_taskName(j).toLowerCase()];
-}
-function renderJobsTable() {
-  const tb = document.querySelector("#jobs-table tbody");
-  tb.innerHTML = "";
-  let rows = JOBS_CACHE.slice();
-  if (JOBS_SORT.col) {
-    rows.sort((a, b) => {
-      const ka = _jobSortKey(a, JOBS_SORT.col), kb = _jobSortKey(b, JOBS_SORT.col);
-      for (let i = 0; i < Math.max(ka.length, kb.length); i++) {
-        if (ka[i] < kb[i]) return -JOBS_SORT.dir;
-        if (ka[i] > kb[i]) return JOBS_SORT.dir;
-      }
-      return 0;
-    });
-  }
-  rows.forEach(j => {
-    const viewBtn = el("button", { class: "btn secondary small" }, ["Лог"]);
-    const logId = j.group ? j.current_id : j.id;
-    if (logId) viewBtn.addEventListener("click", () => selectTask(logId, j.title));
-    else viewBtn.disabled = true;
-    let statusCell;
-    if (j.group) {
-      const b = _groupBadge(j);
-      statusCell = el("span", { class: "status " + j.status, title: b.tip }, [b.txt]);
-    } else {
-      statusCell = el("span", { class: "status " + j.status }, [statusRu(j.status, j.queue_pos)]);
-    }
-    tb.appendChild(el("tr", { class: j.group ? "job-group" : "" }, [
-      el("td", {}, _nameContent(j)),
-      el("td", {}, [statusCell]),
-      el("td", {}, [viewBtn]),
-    ]));
-  });
-}
-async function loadJobs() {
-  try {
-    // как в панели: агрегаты групп (пакетные загрузки) + одиночные задачи вне групп
-    const data = await api("GET", "/api/jobs?limit=500");
-    const groups = data.groups || [];
-    const gTitles = new Set(groups.map(g => g.title));
-    JOBS_CACHE = groups.concat((data.jobs || []).filter(j => !gTitles.has(j.title)));
-    renderJobsTable();
-  } catch (e) { toast("Ошибка: " + e.message); }
-}
-document.getElementById("jobs-reload").addEventListener("click", loadJobs);
-// клик по заголовку колонки — сортировка (повторный клик меняет направление)
-document.querySelectorAll("#jobs-table thead th[data-sort]").forEach(th => {
-  if (!th.dataset.label) th.dataset.label = th.textContent;   // запоминаем базовую подпись
-  th.addEventListener("click", () => {
-    const col = th.dataset.sort;
-    if (JOBS_SORT.col === col) JOBS_SORT.dir *= -1; else { JOBS_SORT.col = col; JOBS_SORT.dir = 1; }
-    document.querySelectorAll("#jobs-table thead th[data-sort]").forEach(h => {
-      h.textContent = h.dataset.label + (h.dataset.sort === JOBS_SORT.col ? (JOBS_SORT.dir > 0 ? " ↑" : " ↓") : "");
-    });
-    renderJobsTable();
-  });
 });
 
 // ------------------------------------------------------------------ апгрейд 320k
@@ -1012,98 +1038,200 @@ document.getElementById("upg-stop").addEventListener("click", async () => {
 
 document.getElementById("syncall-btn").addEventListener("click", async () => {
   if (!confirm("Запустить синхронизацию всех плейлистов? Это может занять много времени.")) return;
-  try { await api("POST", "/api/sync-all"); toast("Синхронизация всех в очереди"); showTasks(); pollTasks(); }
+  try { await api("POST", "/api/sync-all"); toast("Синхронизация всех в очереди"); pollTasks(); }
   catch (e) { toast("Ошибка: " + e.message); }
 });
 
-// ------------------------------------------------------------------ панель задач (справа снизу)
+// ------------------------------------------------------------------ активность, строка статуса, опрос
+// Главный индикатор — строка статуса вверху (видна на любой вкладке): что сервис
+// делает прямо сейчас, с прогрессом. Вкладка «Активность» — понятные строки задач,
+// сырой лог — по клику. Всё питается одним опросом /api/jobs.
 let TASK_POLL_TIMER = null;
 let TASK_POLL_PAUSED = false;   // опрос остановлен, т.к. вкладка не видна
-let SEL_JOB = null;        // id задачи, чей лог открыт (инлайн под строкой)
+let SEL_JOB = null;             // id задачи, чей лог открыт (под строкой)
 let SEL_LOG_OFFSET = 0;
-const LOG_EL = document.getElementById("tasklog");  // переносим под выбранную строку
+const LOG_EL = document.getElementById("tasklog");
+let LIVE_SYNCS = {};            // playlist_id -> {status, job_id, progress}
 
-function showTasks() { document.getElementById("taskspanel").classList.add("visible"); }
 function hideLog() { SEL_JOB = null; if (LOG_EL.parentNode) LOG_EL.remove(); LOG_EL.style.display = "none"; }
 
-function updateCollapseArrow() {
-  const collapsed = document.getElementById("taskspanel").classList.contains("collapsed");
-  // развёрнуто (очередь видна) → стрелка вниз; свёрнуто (скрыто) → вверх
-  document.getElementById("tasks-collapse").textContent = collapsed ? "▴" : "▾";
+// ----- форматирование
+function plural(n, one, few, many) {
+  const a = Math.abs(n) % 100, b = a % 10;
+  if (a > 10 && a < 20) return many;
+  if (b === 1) return one;
+  if (b >= 2 && b <= 4) return few;
+  return many;
 }
-// клик по всей строке-шапке (а не по пиксельной кнопке) сворачивает/разворачивает
-document.getElementById("taskshead").addEventListener("click", () => {
-  const collapsed = document.getElementById("taskspanel").classList.toggle("collapsed");
-  if (collapsed) hideLog();           // сворачивание закрывает и открытый лог
-  updateCollapseArrow();
-});
-updateCollapseArrow();
+function fmtAgo(ts) {
+  if (!ts) return "";
+  const s = Date.now() / 1000 - ts;
+  if (s < 60) return "только что";
+  if (s < 3600) return Math.round(s / 60) + " мин назад";
+  if (s < 86400) return Math.round(s / 3600) + " ч назад";
+  return Math.round(s / 86400) + " дн назад";
+}
+function fmtLeft(sec) {
+  if (sec == null) return "";
+  if (sec < 90) return "осталось ~1 мин";
+  if (sec < 3600) return `осталось ~${Math.round(sec / 60)} мин`;
+  if (sec >= 48 * 3600) return `осталось ~${Math.round(sec / 86400)} дн`;
+  const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+  return `осталось ~${h} ч` + (m ? ` ${m} мин` : "");
+}
+// полоса прогресса; done == null — неопределённая (идёт подготовка)
+function progressBar(done, total) {
+  const bar = el("div", { class: "pbar" + (done == null || !total ? " indeterminate" : "") });
+  const fill = el("i");
+  if (done != null && total) fill.style.width = Math.min(100, done / total * 100).toFixed(1) + "%";
+  bar.appendChild(fill);
+  return bar;
+}
+const PHASE_TEXT = {
+  list: "получаю список «Любимых» из Spotify…",
+  prepare: "собираю данные треков…",
+};
+function syncDetail(p) {
+  if (p.phase === "list") return PHASE_TEXT.list;
+  if (p.phase === "prepare") return PHASE_TEXT.prepare + (p.total ? ` ${p.total} ${plural(p.total, "трек", "трека", "треков")}` : "");
+  const parts = [`${p.processed} из ${p.total}`];
+  if (p.downloaded) parts.push(`скачано ${p.downloaded}`);
+  if (p.skipped) parts.push(`уже было ${p.skipped}`);
+  if (p.failed) parts.push(`не найдено ${p.failed}`);
+  if (p.eta_seconds != null) parts.push(fmtLeft(p.eta_seconds));
+  return parts.join(" · ");
+}
+function syncSummary(p) {
+  const parts = [];
+  if (p.downloaded) parts.push(`скачано ${p.downloaded}`);
+  if (p.skipped) parts.push(`уже было ${p.skipped}`);
+  if (p.failed) parts.push(`не найдено ${p.failed}`);
+  return parts.length ? parts.join(" · ") : (p.total ? "новых треков нет" : "");
+}
 
-// ----- изменение размера панели «Задачи» (ручка в левом-верхнем углу) -----
-// Панель закреплена за правый-нижний угол (right/bottom fixed), поэтому увеличение
-// ширины/высоты раздвигает её ВЛЕВО и ВВЕРХ — прочь от контента. Размер сохраняется.
-(function initTasksResize() {
-  const SIZE_KEY = "spotdl_tasks_size";
-  const MIN_W = 280, MIN_H = 160;
-  const panel = document.getElementById("taskspanel");
-  const handle = el("div", { class: "task-resize", title: "Потянуть — изменить размер" });
-  panel.appendChild(handle);
+// ----- переход на вкладку
+function switchView(view) {
+  const b = document.querySelector(`nav button[data-view="${view}"]`);
+  if (b) b.click();
+}
+function openJobLog(jobId) {
+  switchView("jobs");
+  if (SEL_JOB !== jobId) selectTask(jobId);
+}
 
-  let lastSize = null;
-  function applySize(w, h) {
-    const maxW = window.innerWidth - 32, maxH = window.innerHeight - 32;
-    w = Math.max(MIN_W, Math.min(w, maxW));
-    h = Math.max(MIN_H, Math.min(h, maxH));
-    panel.style.width = w + "px";
-    // высоту НЕ фиксируем, а ограничиваем максимум: короткий список (1 задача)
-    // ужимает панель до своего размера, длинный — упирается в этот максимум и скроллится.
-    panel.style.height = "";
-    panel.style.maxHeight = h + "px";
-    panel.classList.add("resized");
-    lastSize = { w, h };
-    return lastSize;
+// ----- строка статуса
+const KIND_TITLE = { sync: "Синхронизация", "sync-all": "Синхронизация всех", autosync: "Автосинхронизация" };
+
+function stripItem({ icon, iconCls, title, sub, right, bar, extra, onClick }) {
+  const item = el("div", { class: "strip-item" + (onClick ? " clickable" : "") }, [
+    el("div", { class: "strip-head" }, [
+      el("span", { class: "strip-icon " + (iconCls || ""), "aria-hidden": "true" }, [icon]),
+      el("div", { class: "strip-text" }, [
+        el("div", { class: "strip-title" }, [title]),
+        sub ? el("div", { class: "strip-sub muted small" }, [sub]) : "",
+      ]),
+      right ? el("div", { class: "strip-right" }, right) : "",
+    ]),
+    bar || "",
+    extra ? el("div", { class: "strip-extra muted small" }, [extra]) : "",
+  ]);
+  if (onClick) item.addEventListener("click", onClick);
+  return item;
+}
+
+function renderStatusStrip(d) {
+  const box = document.getElementById("status-strip");
+  const items = [];
+  const running = (d.jobs || []).filter(j => j.status === "running");
+
+  // 1. синки — с прогрессом
+  running.filter(j => j.progress).forEach(j => {
+    const p = j.progress;
+    let title = `${KIND_TITLE[j.kind] || "Синхронизация"} «${p.name}»`;
+    if (p.count > 1) title = `${KIND_TITLE[j.kind]} · «${p.name}» (${p.index} из ${p.count})`;
+    const dl = p.phase === "download";
+    const right = dl && p.total
+      ? [el("div", { class: "strip-count" }, [`${p.processed} / ${p.total}`]),
+         p.eta_seconds != null ? el("div", { class: "muted small" }, [fmtLeft(p.eta_seconds)]) : ""]
+      : null;
+    const stats = [];
+    if (p.downloaded) stats.push(`скачано ${p.downloaded}`);
+    if (p.skipped) stats.push(`уже было ${p.skipped}`);
+    if (p.failed) stats.push(`не найдено ${p.failed}`);
+    items.push(stripItem({
+      icon: "⟳", iconCls: "spin", title,
+      sub: dl ? (p.current ? `Сейчас: ${p.current}` : "качаю…") : syncDetail(p),
+      right, bar: progressBar(dl ? p.processed : null, p.total),
+      extra: stats.join(" · "), onClick: () => openJobLog(j.id),
+    }));
+  });
+
+  // 2. загрузки треков (Ненайденные): одна строка на всё
+  const tracks = running.filter(j => !j.progress && !["sync", "sync-all", "autosync"].includes(j.kind));
+  const batch = (d.groups || []).find(g => g.running > 0 || g.queued > 0);
+  if (tracks.length || batch) {
+    const cur = tracks[0];
+    const src = cur && SOURCE[cur.kind] ? SOURCE[cur.kind].label : "";
+    const title = batch ? `Загрузка треков «${batch.name}»` : "Загрузка трека";
+    const sub = cur ? `Сейчас: ${cur.subject || cur.name}` + (src ? ` · ${src}` : "") : "";
+    const right = batch ? [el("div", { class: "strip-count" }, [`${batch.done + batch.failed} / ${batch.total}`])] : null;
+    const extra = [];
+    if (batch && batch.failed) extra.push(`не удалось ${batch.failed}`);
+    if (d.queued) extra.push(`в очереди ${d.queued}`);
+    items.push(stripItem({
+      icon: "↓", iconCls: "pulse", title, sub, right,
+      bar: batch ? progressBar(batch.done + batch.failed, batch.total) : null,
+      extra: extra.join(" · "), onClick: () => cur ? openJobLog(cur.id) : switchView("jobs"),
+    }));
   }
-  // восстановить сохранённый размер
-  try {
-    const s = JSON.parse(localStorage.getItem(SIZE_KEY) || "null");
-    if (s && s.w && s.h) applySize(s.w, s.h);
-  } catch (e) { /* игнор */ }
 
-  let dragging = false, sx = 0, sy = 0, sw = 0, sh = 0;
-  handle.addEventListener("pointerdown", (e) => {
-    e.preventDefault(); e.stopPropagation();
-    dragging = true;
-    sx = e.clientX; sy = e.clientY;
-    const r = panel.getBoundingClientRect();
-    sw = r.width;
-    // отталкиваемся от текущего заданного максимума (а не от ужатого по контенту размера)
-    sh = panel.style.maxHeight ? parseFloat(panel.style.maxHeight) : r.height;
-    handle.setPointerCapture(e.pointerId);
-    document.body.style.userSelect = "none";
-  });
-  handle.addEventListener("pointermove", (e) => {
-    if (!dragging) return;
-    // тянем верх-левый угол: влево → шире, вверх → выше (предел высоты)
-    applySize(sw + (sx - e.clientX), sh + (sy - e.clientY));
-  });
-  function endDrag() {
-    if (!dragging) return;
-    dragging = false;
-    document.body.style.userSelect = "";
-    if (lastSize) { try { localStorage.setItem(SIZE_KEY, JSON.stringify(lastSize)); } catch (e) { /* игнор */ } }
+  // 3. апгрейд до 320k
+  const u = d.upgrade;
+  if (u && ["running", "waiting", "stopping"].includes(u.state)) {
+    const processed = u.done + u.failed + u.skipped;
+    const sub = u.state === "waiting" ? "пауза до завтра — дневной лимит"
+      : u.state === "stopping" ? "останавливается…"
+      : (u.current ? `Сейчас: ${u.current}` : "");
+    items.push(stripItem({
+      icon: "↑", iconCls: "pulse", title: "Апгрейд до 320k", sub,
+      right: [el("div", { class: "strip-count" }, [`${processed} / ${u.total}`]),
+              u.eta_seconds != null ? el("div", { class: "muted small" }, [fmtLeft(u.eta_seconds)]) : ""],
+      bar: progressBar(processed, u.total),
+      extra: [`улучшено ${u.done}`, u.skipped ? `уже хорошие ${u.skipped}` : "", u.failed ? `ошибок ${u.failed}` : ""]
+        .filter(Boolean).join(" · "),
+      onClick: () => switchView("upgrade"),
+    }));
   }
-  handle.addEventListener("pointerup", endDrag);
-  handle.addEventListener("pointercancel", endDrag);
-  handle.addEventListener("click", (e) => e.stopPropagation());  // не сворачивать по клику на ручке
-  // не вылезать за экран при уменьшении окна
-  window.addEventListener("resize", () => {
-    if (!panel.classList.contains("resized") || !lastSize) return;
-    applySize(lastSize.w, lastSize.h);
-  });
-})();
 
+  // 4. простой
+  if (!items.length) {
+    const ls = d.last_sync;
+    const parts = [];
+    if (ls) {
+      let t = `последний синк «${ls.name}» ${fmtAgo(ls.ts)}`;
+      if (ls.downloaded) t += `, +${ls.downloaded} ${plural(ls.downloaded, "трек", "трека", "треков")}`;
+      parts.push(t);
+    }
+    if (d.next_autosync) {
+      const s = d.next_autosync - Date.now() / 1000;
+      parts.push(s > 60 ? `следующий автосинк ${fmtIn(s)}` : "автосинк вот-вот начнётся");
+    }
+    if (d.queued) parts.push(`в очереди ${d.queued}`);
+    items.push(stripItem({
+      icon: "✓", iconCls: "ok", title: d.queued ? "Ждёт очереди" : "Всё спокойно",
+      sub: parts.join(" · ") || "синхронизаций ещё не было",
+    }));
+  }
+  box.replaceChildren(...items);
+}
+function fmtIn(sec) {
+  if (sec < 3600) return `через ${Math.round(sec / 60)} мин`;
+  if (sec < 86400) return `через ${Math.round(sec / 3600)} ч`;
+  return `через ${Math.round(sec / 86400)} дн`;
+}
+
+// ----- действия с задачами
 function startTaskPolling() { pollTasks(); }
-
 async function cancelJob(jobId) {
   try { await api("POST", "/api/jobs/" + jobId + "/cancel"); pollTasks(); }
   catch (e) { toast("Не отменить: " + e.message); }
@@ -1125,6 +1253,7 @@ async function removeGroup(title) {
   catch (e) { toast("Не удалить: " + e.message); }
 }
 
+// ----- опрос
 async function pollTasks() {
   clearTimeout(TASK_POLL_TIMER);
   TASK_POLL_TIMER = null;
@@ -1134,17 +1263,13 @@ async function pollTasks() {
   // а забытая открытая вкладка иначе будила бы бэкенд круглосуточно.
   if (document.hidden) { TASK_POLL_PAUSED = true; return; }
   TASK_POLL_PAUSED = false;
-  let jobs = [];
-  let groups = [];
-  let activeTotal = 0;
-  try {
-    const data = await api("GET", "/api/jobs");
-    jobs = data.jobs || [];
-    groups = data.groups || [];
-    activeTotal = data.active || 0;   // реальное число активных по всему реестру
-  } catch (e) { /* молча, повторим */ }
+  let data = null;
+  try { data = await api("GET", "/api/jobs?limit=100"); } catch (e) { /* молча, повторим */ }
+  const jobs = (data && data.jobs) || [];
+  const groups = (data && data.groups) || [];
+  const activeTotal = (data && data.active) || 0;
 
-  // обновляем строки ненайденных по статусу их задач скачивания/заливки
+  // строки «Ненайденных» — по статусу их задач скачивания/заливки
   jobs.forEach(j => {
     const row = PENDING.get(j.id);
     if (!row) return;
@@ -1155,7 +1280,7 @@ async function pollTasks() {
       setTimeout(() => { if (row.rowEl.parentNode) row.rowEl.parentNode.removeChild(row.rowEl); }, 400);
       PENDING.delete(j.id);
     } else if (j.status === "error") {
-      setRowState(row, "error");           // компактный «⚠ Ошибка · Повторить», детали — в панели
+      setRowState(row, "error");           // компактный «⚠ Ошибка · Повторить», детали — в «Активности»
       PENDING.delete(j.id);
     } else if (j.status === "cancelled") {
       setRowState(row, "idle");            // вернуть кнопки-источники
@@ -1165,21 +1290,29 @@ async function pollTasks() {
     }
   });
 
-  // отображение: агрегаты групп (пакетные загрузки) + одиночные задачи, чьи заголовки
-  // НЕ вошли в группу. Так панель показывает 1 строку на плейлист с прогрессом X/Y,
-  // а не кучу одинаковых. Синхронизация строк «Ненайденных» выше — по индивидуальным.
+  if (data) {
+    renderStatusStrip(data);
+    // синк плейлиста закончился — обновить сводку карточек (треков, не найдено, когда)
+    const nowSyncs = data.syncs || {};
+    const ended = Object.keys(LIVE_SYNCS).some(id => !nowSyncs[id]);
+    LIVE_SYNCS = nowSyncs;
+    const plView = document.getElementById("view-playlists").classList.contains("active");
+    if (plView) { if (ended) loadPlaylists(); else updatePlaylistLive(LIVE_SYNCS); }
+  }
+
+  // «Активность»: агрегаты пакетных загрузок + одиночные задачи вне групп
   const groupTitles = new Set(groups.map(g => g.title));
-  const singles = jobs.filter(j => !groupTitles.has(j.title));
-  const display = groups.concat(singles);
+  const display = groups.concat(jobs.filter(j => !groupTitles.has(j.title)));
   const isActive = e => e.group ? (e.running > 0 || e.queued > 0) : (e.status === "running" || e.status === "queued");
   const isRunning = e => e.group ? e.running > 0 : e.status === "running";
   display.sort((a, b) => (isActive(b) - isActive(a)) || (isRunning(b) - isRunning(a)));
-  renderTaskList(display, activeTotal);
+  renderTaskList(display);
   if (SEL_JOB) refreshSelectedLog();
 
-  // В простое опрашиваем редко: ничего не меняется, а бэкенд на каждый запрос
-  // проходит по реестру задач. Пока что-то идёт — прежние 1.5 с.
-  const delay = (activeTotal > 0 || PENDING.size > 0) ? 1500 : 15000;
+  // Пока что-то идёт — раз в 1.5 с; апгрейд меняется медленно — раз в 5 с;
+  // в простое — редко: ничего не меняется, а бэкенд на каждый запрос проходит по реестру.
+  const upg = data && data.upgrade && ["running", "waiting", "stopping"].includes(data.upgrade.state);
+  const delay = (activeTotal > 0 || PENDING.size > 0) ? 1500 : (upg ? 5000 : 15000);
   TASK_POLL_TIMER = setTimeout(pollTasks, delay);
 }
 
@@ -1192,40 +1325,66 @@ document.addEventListener("visibilitychange", () => {
   if (upg && upg.classList.contains("active")) loadUpgrade();
 });
 
-// Инкрементальный рендер списка задач: НЕ пересоздаём DOM каждый поллинг, иначе
-// сбрасывается выделение текста в открытом логе. Обновляем строки на месте.
-const TASK_NODES = new Map();  // id -> {row, statusEl, actBtn, job}
+// ----- вкладка «Активность»
+// Инкрементальный рендер: НЕ пересоздаём DOM каждый опрос, иначе сбрасывается
+// выделение текста в открытом логе. Обновляем строки на месте.
+const TASK_NODES = new Map();  // id -> {row, ...}
 
-function _statusText(j) {
-  return statusRu(j.status, j.queue_pos);
+function jobTitle(j) {
+  if (j.group) return `Загрузка треков «${j.name}»`;
+  if (KIND_TITLE[j.kind]) return j.kind === "sync" ? `Синхронизация «${j.name}»` : KIND_TITLE[j.kind];
+  return j.subject || j.name;
 }
-// текст и подсказка для агрегата группы (прогресс X/Y)
-function _groupBadge(j) {
-  const txt = `${j.done}/${j.total}` + (j.failed ? ` ⚠${j.failed}` : "");
-  let tip = `готово ${j.done} из ${j.total}`;
-  if (j.running) tip += ` · идёт ${j.running}`;
-  if (j.queued) tip += ` · в очереди ${j.queued}`;
-  if (j.failed) tip += ` · ошибок ${j.failed}`;
-  if (j.cancelled) tip += ` · отменено ${j.cancelled}`;
-  return { txt, tip };
+function jobDetail(j) {
+  if (j.group) {
+    const parts = [`${j.done} из ${j.total}`];
+    if (j.failed) parts.push(`не удалось ${j.failed}`);
+    if (j.queued) parts.push(`в очереди ${j.queued}`);
+    return parts.join(" · ");
+  }
+  const p = j.progress;
+  if (p && j.status === "running") {
+    const where = p.count > 1 ? `«${p.name}» (${p.index} из ${p.count}) · ` : "";
+    return where + syncDetail(p);
+  }
+  const parts = [];
+  if (p && j.status !== "queued") {
+    const s = syncSummary(p);
+    if (s) parts.push((p.count > 1 ? `последний «${p.name}»: ` : "") + s);
+  } else if (!p && j.subject && j.name) {
+    parts.push(`плейлист «${j.name}»`);
+  }
+  if (j.finished && j.status !== "running") parts.push(fmtAgo(j.finished));
+  return parts.join(" · ");
 }
-// id для лога/выделения: у группы — текущий бегущий участник, у задачи — она сама
+function _groupStatus(j) {
+  if (j.running || j.queued) return { text: "идёт", cls: "running" };
+  if (j.failed && !j.done) return { text: "ошибка", cls: "error" };
+  return { text: j.failed ? "готово, есть ошибки" : "готово", cls: j.failed ? "cancelled" : "done" };
+}
 function _logId(j) { return j.group ? j.current_id : j.id; }
 
 function _makeTaskNode(j) {
-  const statusEl = el("span", { class: "status " + j.status }, [""]);
+  const tag = j.group ? _sourceTag("download") : _sourceTag(j.kind);
+  const titleEl = el("div", { class: "act-title" }, [""]);
+  const detailEl = el("div", { class: "act-detail muted small" }, [""]);
+  const barWrap = el("div", { class: "act-bar" });
+  const statusEl = el("span", { class: "status" }, [""]);
   const copyBtn = el("button", { class: "tact copy", title: "Копировать лог" }, ["📋"]);
   const actBtn = el("button", { class: "tact" }, [""]);
-  const row = el("div", { class: "taskrow" + (j.group ? " group" : "") }, [
-    el("span", { class: "tname" }, _nameContent(j)),
+  const row = el("div", { class: "act-row" + (j.group ? " group" : "") }, [
+    el("div", { class: "act-main" }, [
+      el("div", { class: "act-line" }, [tag || "", titleEl]),
+      detailEl, barWrap,
+    ]),
     statusEl, copyBtn, actBtn,
   ]);
-  const node = { row, statusEl, copyBtn, actBtn, job: j };
+  const node = { row, titleEl, detailEl, barWrap, statusEl, copyBtn, actBtn, job: j };
   copyBtn.addEventListener("click", (ev) => { ev.stopPropagation(); const id = _logId(node.job); if (id) copyJobLog(id); });
   actBtn.addEventListener("click", (ev) => {
     ev.stopPropagation();
     const cur = node.job;
-    const active = cur.status === "queued" || cur.status === "running";
+    const active = cur.group ? (cur.running > 0 || cur.queued > 0) : (cur.status === "queued" || cur.status === "running");
     if (cur.group) { if (active) cancelGroup(cur.title); else removeGroup(cur.title); }
     else { if (active) cancelJob(cur.id); else removeJob(cur.id); }
   });
@@ -1235,49 +1394,51 @@ function _makeTaskNode(j) {
 }
 function _updateTaskNode(node, j) {
   node.job = j;
-  node.statusEl.className = "status " + j.status;
-  if (j.group) {
-    const b = _groupBadge(j);
-    node.statusEl.textContent = b.txt;
-    node.statusEl.title = b.tip;
-    node.copyBtn.style.display = j.current_id ? "" : "none";
-  } else {
-    node.statusEl.textContent = _statusText(j);
-    node.statusEl.title = "";
-    node.copyBtn.style.display = "";
+  node.titleEl.textContent = jobTitle(j);
+  node.detailEl.textContent = jobDetail(j);
+  // полоса — у идущих синков и пакетных загрузок
+  node.barWrap.innerHTML = "";
+  if (j.group && (j.running || j.queued)) node.barWrap.appendChild(progressBar(j.done + j.failed, j.total));
+  else if (!j.group && j.status === "running" && j.progress) {
+    const p = j.progress;
+    node.barWrap.appendChild(progressBar(p.phase === "download" ? p.processed : null, p.total));
   }
-  const active = j.status === "queued" || j.status === "running";
+  const st = j.group ? _groupStatus(j) : { text: statusRu(j.status, j.queue_pos), cls: j.status };
+  node.statusEl.className = "status " + st.cls;
+  node.statusEl.textContent = st.text;
+  node.copyBtn.style.display = _logId(j) ? "" : "none";
+  const active = j.group ? (j.running > 0 || j.queued > 0) : (j.status === "queued" || j.status === "running");
   node.actBtn.className = "tact " + (active ? "cancel" : "remove");
   node.actBtn.textContent = active ? "✕" : "🗑";
   node.actBtn.title = active ? (j.group ? "Отменить всю группу" : "Отменить") : "Убрать из списка";
   node.row.classList.toggle("sel", !!_logId(j) && SEL_JOB === _logId(j));
 }
 
-function renderTaskList(jobs, activeTotal) {
-  const panel = document.getElementById("taskspanel");
-  const list = document.getElementById("taskslist");
-
+function renderTaskList(jobs) {
+  const list = document.getElementById("activity-list");
   if (!jobs.length) {
-    panel.classList.remove("visible");
-    document.getElementById("tasks-summary").textContent = "";
     for (const [, n] of TASK_NODES) n.row.remove();
     TASK_NODES.clear();
+    hideLog();
+    if (!list.querySelector(".empty-state")) {
+      list.replaceChildren(el("div", { class: "empty-state muted" },
+        ["Пока пусто. Здесь появятся синхронизации и загрузки треков."]));
+    }
     return;
   }
-  panel.classList.add("visible");
+  const empty = list.querySelector(".empty-state");
+  if (empty) empty.remove();
 
-  const recent = jobs.slice(0, 50);   // панель скроллится; активные всегда сверху (сортировка с бэка)
+  const recent = jobs.slice(0, 100);
   const want = new Set(recent.map(j => j.id));
-  // удалить пропавшие
   for (const [id, n] of [...TASK_NODES]) {
     if (!want.has(id)) {
       n.row.remove(); TASK_NODES.delete(id);
       if (SEL_JOB === id) hideLog();
     }
   }
-  // upsert: существующие узлы НЕ двигаем (иначе сбрасывалось бы выделение/лог),
-  // только обновляем на месте. Новые узлы вставляем prepend'ом, перебирая recent
-  // в ОБРАТНОМ порядке → итог сверху вниз = newest-first (и на старте, и при добавлении).
+  // существующие узлы НЕ двигаем (иначе сбрасывалось бы выделение/лог), только
+  // обновляем. Новые вставляем сверху, перебирая в обратном порядке → newest-first.
   for (let i = recent.length - 1; i >= 0; i--) {
     const j = recent[i];
     let node = TASK_NODES.get(j.id);
@@ -1288,31 +1449,23 @@ function renderTaskList(jobs, activeTotal) {
     }
     _updateTaskNode(node, j);
   }
-
-  // инлайн-лог под выбранной строкой — двигаем ТОЛЬКО если он не на месте
-  // (иначе перенос узла сбрасывал бы выделение/прокрутку при каждом поллинге).
-  // SEL_JOB — id РЕАЛЬНОЙ задачи; для группы её строка имеет id "grp:…", поэтому
-  // ищем узел по _logId (у группы это текущий бегущий участник).
+  // лог под выбранной строкой — двигаем ТОЛЬКО если он не на месте. У группы
+  // строка имеет id "grp:…", поэтому ищем узел ещё и по _logId.
   let sel = SEL_JOB ? TASK_NODES.get(SEL_JOB) : null;
   if (!sel && SEL_JOB) {
     for (const [, n] of TASK_NODES) { if (_logId(n.job) === SEL_JOB) { sel = n; break; } }
   }
-  if (sel && !panel.classList.contains("collapsed")) {
+  if (sel) {
     if (sel.row.nextSibling !== LOG_EL) sel.row.insertAdjacentElement("afterend", LOG_EL);
     LOG_EL.style.display = "block";
-  } else if (LOG_EL.parentNode) {
+  } else if (LOG_EL.parentNode && LOG_EL.parentNode.id === "activity-list") {
     LOG_EL.remove(); LOG_EL.style.display = "none";
   }
-
-  const active = activeTotal || 0;
-  document.getElementById("tasks-summary").textContent = active ? `активно: ${active}` : "";
 }
 
 function selectTask(jobId) {
   if (SEL_JOB === jobId) { hideLog(); pollTasks(); return; }  // повторный клик — закрыть
   SEL_JOB = jobId; SEL_LOG_OFFSET = 0; LOG_EL.textContent = "";
-  document.getElementById("taskspanel").classList.remove("collapsed");
-  updateCollapseArrow();
   pollTasks();   // немедленно перерисует список и подтянет лог под строкой
 }
 

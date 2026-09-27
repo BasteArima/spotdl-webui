@@ -34,7 +34,7 @@
         <button data-view="errors" class="active">Ненайденные</button>
         <button data-view="playlists">Плейлисты</button>
         <button data-view="upgrade">Апгрейд 320k</button>
-        <button data-view="jobs">Задачи</button>
+        <button data-view="jobs">Активность</button>
         <button data-view="settings">Настройки</button>
       </nav>
       <span class="spacer"></span>
@@ -51,6 +51,8 @@
   </header>
 
   <main style="display:none" id="appmain">
+    <!-- что сервис делает прямо сейчас: синк, загрузки, апгрейд — или «всё спокойно» -->
+    <div id="status-strip" role="status" aria-live="polite"></div>
     <div id="env-banner" class="banner" style="display:none"></div>
     <!-- ============ Ненайденные ============ -->
     <section class="view active" id="view-errors">
@@ -80,12 +82,7 @@
         <button class="btn" id="pl-add-btn">+ Добавить плейлист</button>
         <button class="btn secondary" id="pl-reload">Обновить</button>
       </div>
-      <div class="card">
-        <table id="pl-table">
-          <thead><tr><th>Имя</th><th>Тип</th><th>Ссылка</th><th style="width:1%"></th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
+      <div id="pl-cards" class="pl-cards"></div>
     </section>
 
     <!-- ============ Апгрейд 320k ============ -->
@@ -272,31 +269,15 @@
       </div>
     </section>
 
-    <!-- ============ Задачи ============ -->
+    <!-- ============ Активность ============ -->
     <section class="view" id="view-jobs">
-      <div class="toolbar">
-        <button class="btn secondary" id="jobs-reload">Обновить</button>
+      <div class="muted small" style="margin-bottom:10px">
+        Что делает сервис: синхронизации, загрузки, их результат. Клик по строке — подробный лог.
       </div>
-      <div class="card">
-        <table id="jobs-table">
-          <thead><tr><th data-sort="title">Задача</th><th data-sort="status">Статус</th><th style="width:1%"></th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
+      <div class="card activity" id="activity-list"></div>
+      <pre id="tasklog" style="display:none"></pre>
     </section>
   </main>
-
-  <!-- Панель задач (очередь + статусы) -->
-  <div id="taskspanel">
-    <div class="taskshead" id="taskshead" title="Свернуть/развернуть">
-      <span class="title">Задачи</span>
-      <span class="muted small" id="tasks-summary"></span>
-      <span class="spacer"></span>
-      <span class="collapse-ind" id="tasks-collapse" aria-hidden="true">▾</span>
-    </div>
-    <div id="taskslist"></div>
-    <pre id="tasklog" style="display:none"></pre>
-  </div>
 
   <!-- Модалка плейлиста -->
   <div class="modal-bg" id="pl-modal-bg">

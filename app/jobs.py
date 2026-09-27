@@ -16,6 +16,7 @@ import json
 import os
 import queue
 import random
+import re
 import signal
 import subprocess
 import sys
@@ -94,6 +95,10 @@ class Job:
         self.returncode: Optional[int] = None
         self.cancelled = False
         self._lock = threading.Lock()
+        # для UI: ход синка (SyncProgress), какой плейлист, какой трек (одиночные)
+        self.progress: Optional["SyncProgress"] = None
+        self.playlist_id: str = ""
+        self.subject: str = ""
 
     def append(self, text: str) -> None:
         with self._lock:
@@ -130,6 +135,9 @@ class Job:
                 "finished": self.finished,
                 "returncode": self.returncode,
                 "log_len": self.total_log_len(),
+                "playlist_id": self.playlist_id,
+                "subject": self.subject,
+                "progress": self.progress.to_dict() if self.progress else None,
             }
             if include_log:
                 abs_start = max(since, self._dropped)   # вытесненные строки пропускаем
@@ -144,6 +152,165 @@ def _bump_rev() -> None:
     global _rev
     with _rev_lock:
         _rev += 1
+
+
+# ------------------------------------------------------------------ ход синка (для UI)
+class SyncProgress:
+    """Ход sync плейлиста — по выводу `spotdl --simple-tui` (для строки статуса и
+    карточек плейлистов; сырой лог остаётся для подробностей).
+
+    spotdl печатает общий счётчик «K/N complete» и статус трека «Artist - Title:
+    Done|Skipped|Converting…». Строки «Error» по треку он НЕ печатает (у ошибки нет
+    прироста прогресса), поэтому ошибки = обработано − скачано − пропущено."""
+
+    _COMPLETE = re.compile(r"(\d+)/(\d+) complete\s*$")
+    _FOUND = re.compile(r"^Found (\d+) songs in ")
+    _SONG = re.compile(r"^(?P<song>.+): (?P<st>Downloading|Converting|Embedding metadata|Done|Skipped)\s*$")
+
+    def __init__(self, playlist_id: str, name: str, index: int = 0, count: int = 0):
+        self.playlist_id, self.name = playlist_id, name
+        self.index, self.count = index, count      # N-й плейлист из M (синк всех)
+        self.phase = "prepare"   # list (Liked Songs) | prepare (метаданные) | download | done
+        self.total = 0
+        self.processed = self.downloaded = self.skipped = 0
+        self.current = ""
+        self.started_dl: Optional[float] = None
+        self.finished: Optional[float] = None
+        self._last_bump = 0.0
+
+    def _changed(self, force: bool = False) -> None:
+        now = time.time()
+        if force or now - self._last_bump >= 1.0:   # опрос UI — раз в 1.5 с, чаще незачем
+            self._last_bump = now
+            _bump_rev()
+
+    def set_phase(self, phase: str) -> None:
+        self.phase = phase
+        if phase == "done":
+            self.finished, self.current = time.time(), ""
+        self._changed(force=True)
+
+    def feed(self, line: str) -> None:
+        line = line.strip()
+        m = self._COMPLETE.search(line)
+        if m:
+            self.processed, self.total = int(m.group(1)), int(m.group(2))
+            self._downloading()
+            self._changed()
+            return
+        m = self._FOUND.match(line)
+        if m and not self.total:
+            self.total = int(m.group(1))
+            self._changed()
+            return
+        m = self._SONG.match(line)
+        if m:
+            st = m.group("st")
+            if st == "Done":
+                self.downloaded += 1
+            elif st == "Skipped":
+                self.skipped += 1
+            else:
+                self.current = m.group("song")
+            self._downloading()
+            self._changed()
+
+    def _downloading(self) -> None:
+        if self.phase != "download":
+            self.phase = "download"
+            self.started_dl = self.started_dl or time.time()
+
+    @property
+    def failed(self) -> int:
+        return max(0, self.processed - self.downloaded - self.skipped)
+
+    def to_dict(self) -> dict:
+        eta = None
+        if self.phase == "download" and self.started_dl and self.total and self.processed >= 3:
+            elapsed = time.time() - self.started_dl
+            if elapsed >= 20:
+                eta = int((self.total - self.processed) * elapsed / self.processed)
+        return {
+            "playlist_id": self.playlist_id, "name": self.name,
+            "index": self.index, "count": self.count, "phase": self.phase,
+            "total": self.total, "processed": self.processed, "downloaded": self.downloaded,
+            "skipped": self.skipped, "failed": self.failed, "current": self.current,
+            "eta_seconds": eta, "finished": self.finished,
+        }
+
+
+# ------------------------------------------------------------------ итоги синков по плейлистам
+# Для карточек плейлистов: когда синкался, чем закончилось, сколько скачано/не
+# найдено. Переживает рестарт (/conf/.webui-playlist-stats.json).
+_STATS_PATH = os.path.join(config.CONF_DIR, ".webui-playlist-stats.json")
+_stats_lock = threading.Lock()
+_stats_cache: Optional[dict] = None
+
+
+def playlist_stats() -> dict:
+    global _stats_cache
+    with _stats_lock:
+        if _stats_cache is None:
+            try:
+                with open(_STATS_PATH, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                _stats_cache = data if isinstance(data, dict) else {}
+            except (OSError, ValueError):
+                _stats_cache = {}
+        return dict(_stats_cache)
+
+
+def _record_sync(prog: "SyncProgress", ok: bool) -> None:
+    global _stats_cache
+    entry = {"ts": time.time(), "ok": ok, "name": prog.name, "total": prog.total,
+             "downloaded": prog.downloaded, "skipped": prog.skipped, "failed": prog.failed}
+    playlist_stats()        # прогреть кэш
+    with _stats_lock:
+        data = dict(_stats_cache or {})
+        data[prog.playlist_id] = entry
+        try:
+            tmp = _STATS_PATH + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, ensure_ascii=False)
+            os.replace(tmp, _STATS_PATH)
+        except OSError:
+            pass
+        _stats_cache = data
+
+
+_savefile_counts: Dict[str, tuple] = {}   # путь -> (mtime, число треков)
+
+
+def playlist_track_count(pl: playlists.Playlist) -> Optional[int]:
+    """Сколько треков в плейлисте по последнему синку (save-файл spotdl).
+    Файл бывает на мегабайты — кэш по mtime, читаем только при изменении."""
+    path = config.savefile_path(pl.id)
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return None
+    cached = _savefile_counts.get(path)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            count = len(json.load(fh).get("songs") or [])
+    except (OSError, ValueError, AttributeError):
+        return None
+    _savefile_counts[path] = (mtime, count)
+    return count
+
+
+def track_label(safe: str, spotify_url: str) -> str:
+    """«Исполнитель - Название» трека из errors-файла плейлиста (для строк
+    активности вместо безликого «Скачивание трека»)."""
+    try:
+        for t in errors_parser.parse_errors_file(config.errors_path(safe))["tracks"]:
+            if t["spotify_url"] == spotify_url:
+                return t.get("song") or ""
+    except Exception:  # noqa: BLE001 — подпись не критична
+        pass
+    return ""
 
 
 def _malloc_trim() -> None:
@@ -345,7 +512,8 @@ def _redact(cmd: List[str]) -> str:
 
 
 def _run_process(job: Job, cmd: List[str], cwd: str = "/",
-                 timeout: Optional[float] = None, kill_on_cancel: bool = True):
+                 timeout: Optional[float] = None, kill_on_cancel: bool = True,
+                 on_line: Optional[Callable[[str], None]] = None):
     """Запускает процесс, построчно пишет stdout/stderr в лог задачи И в stdout
     контейнера (видно в `docker logs`). Возвращает (код_возврата, строки_вывода).
 
@@ -360,6 +528,9 @@ def _run_process(job: Job, cmd: List[str], cwd: str = "/",
     job.append("$ " + _redact(cmd))
     env = dict(os.environ)
     env.setdefault("PYTHONUNBUFFERED", "1")
+    # spotdl пишет через rich, а тот без терминала режет строки на 80 колонок —
+    # длинное «Исполнитель - Название: Done» разорвалось бы и не распозналось
+    env["COLUMNS"] = "1000"
     out_lines: List[str] = []
     try:
         proc = subprocess.Popen(
@@ -408,6 +579,11 @@ def _run_process(job: Job, cmd: List[str], cwd: str = "/",
         out_lines.append(line)
         job.append(line)
         print(f"[{job.id}] {line}", flush=True)  # дублируем в docker logs
+        if on_line:
+            try:
+                on_line(line)
+            except Exception:  # noqa: BLE001 — разбор прогресса не должен ронять задачу
+                pass
     proc.wait()
 
     if watch["reason"] == "timeout":
@@ -421,7 +597,7 @@ def _run_process(job: Job, cmd: List[str], cwd: str = "/",
 
 
 def run_spotdl(job: Job, args: List[str], timeout: Optional[float] = None,
-               kill_on_cancel: bool = True):
+               kill_on_cancel: bool = True, on_line: Optional[Callable[[str], None]] = None):
     """Запуск spotdl с cwd=/ — критично: spotdl 4.5.0 прогоняет части пути --m3u
     через sanitize, который вырезает '/', превращая абсолютный путь в
     относительный. Из cwd=/ он резолвится обратно в /music/... (как автосинк).
@@ -430,7 +606,7 @@ def run_spotdl(job: Job, args: List[str], timeout: Optional[float] = None,
     (синк целого плейлиста легитимно долгий) + kill_on_cancel=False (мягкая отмена,
     чтобы не оборвать запись m3u/save-file)."""
     return _run_process(job, [config.SPOTDL_BIN] + args, cwd="/",
-                        timeout=timeout, kill_on_cancel=kill_on_cancel)
+                        timeout=timeout, kill_on_cancel=kill_on_cancel, on_line=on_line)
 
 
 def _lyrics_args() -> List[str]:
@@ -546,8 +722,9 @@ class AlreadySyncing(RuntimeError):
     """Этот плейлист уже синкает другая задача."""
 
 
-def _sync_locked(job: Job, pl: playlists.Playlist) -> None:
-    """Sync плейлиста под локом со сбросом errors-файла (защита от дублей)."""
+def _sync_locked(job: Job, pl: playlists.Playlist, index: int = 0, count: int = 0) -> None:
+    """Sync плейлиста под локом со сбросом errors-файла (защита от дублей).
+    index/count — N-й плейлист из M при синке всех (для строки статуса)."""
     with _active_syncs_lock:
         other = _active_syncs.get(pl.id)
         if other and other != job.id:
@@ -557,30 +734,40 @@ def _sync_locked(job: Job, pl: playlists.Playlist) -> None:
                                  f"этот запуск не нужен, смотрите её лог")
         _active_syncs[pl.id] = job.id
     try:
-        _sync_locked_inner(job, pl)
+        job.playlist_id = pl.id
+        job.progress = SyncProgress(pl.id, pl.name, index, count)
+        _bump_rev()
+        _sync_locked_inner(job, pl, job.progress)
     finally:
         with _active_syncs_lock:
             if _active_syncs.get(pl.id) == job.id:
                 del _active_syncs[pl.id]
 
 
-def _sync_locked_inner(job: Job, pl: playlists.Playlist) -> None:
+def _sync_locked_inner(job: Job, pl: playlists.Playlist, prog: "SyncProgress") -> None:
     query = None
     if is_saved(pl.url):
         # список — ДО сброса errors-файла: не получили список — старые
         # «ненайденные» остаются как были
+        prog.set_phase("list")
         try:
             query = _liked_songs_query(job)
         except LikedSongsUnavailable as e:
+            prog.set_phase("done")
             raise LikedSongsUnavailable(f"{pl.name}: {e}") from None
         if not query:
             job.append(f"[info] {pl.name}: Liked Songs пуст — нечего синхронизировать")
+            prog.set_phase("done")
             return
+        prog.total = len(query)
+        prog.set_phase("prepare")
     with PlaylistLock(pl.id, job):
         _reset_errors_file(pl.safe)
         # мягкая отмена: текущий spotdl допишет m3u/save-file, sync-all встанет
         # между плейлистами (а не порвёт файлы на полузаписи).
-        run_spotdl(job, sync_args(pl, query), kill_on_cancel=False)
+        rc, _out = run_spotdl(job, sync_args(pl, query), kill_on_cancel=False, on_line=prog.feed)
+    prog.set_phase("done")
+    _record_sync(prog, ok=(rc == 0))
 
 
 def _run_sync_playlist(job: Job, pl: playlists.Playlist) -> None:
@@ -595,13 +782,13 @@ def _run_sync_all(job: Job) -> None:
     if not pls:
         job.append("[info] playlists.txt пуст — нечего синхронизировать")
         return
-    for pl in pls:
+    for i, pl in enumerate(pls, 1):
         if job.cancelled:
             job.append("[cancelled] остановлено пользователем")
             return
         job.append(f"=== sync: {pl.name} ===")
         try:
-            _sync_locked(job, pl)
+            _sync_locked(job, pl, index=i, count=len(pls))
         except TimeoutError as e:
             job.append(f"[skip] {pl.name}: {e}")
         except (LikedSongsUnavailable, AlreadySyncing) as e:
@@ -759,6 +946,7 @@ def enqueue_sync_playlist(url: str) -> Job:
         raise ValueError("Плейлист не найден")
     job = Job("sync", f"Синхронизация: {pl.name}",
               lambda j: _run_sync_playlist(j, pl), name=pl.name)
+    job.playlist_id = pl.id
     return _enqueue(job)
 
 
@@ -782,24 +970,28 @@ def _has_pending_sync_all() -> bool:
 def enqueue_download_one(spotify_url: str, youtube_url: str, safe: str) -> Job:
     job = Job("download", f"Скачивание трека ({safe})",
               lambda j: _run_download_one(j, spotify_url, youtube_url, safe), name=safe)
+    job.subject = track_label(safe, spotify_url)
     return _enqueue(job)
 
 
 def enqueue_deezer(spotify_url: str, safe: str) -> Job:
     job = Job("deezer", f"Deezer: {safe}",
               lambda j: _run_deezer(j, spotify_url, safe), name=safe)
+    job.subject = track_label(safe, spotify_url)
     return _enqueue(job)
 
 
 def enqueue_zotify(spotify_url: str, safe: str, force_realtime: bool = False) -> Job:
     job = Job("zotify", f"Spotify 320k: {safe}",
               lambda j: _run_zotify(j, spotify_url, safe, force_realtime), name=safe)
+    job.subject = track_label(safe, spotify_url)
     return _enqueue(job)
 
 
 def enqueue_upload(temp_path: str, spotify_url: str, safe: str, orig_name: str) -> Job:
     job = Job("upload", f"Заливка файла ({safe})",
               lambda j: _run_upload(j, temp_path, spotify_url, safe, orig_name), name=safe)
+    job.subject = track_label(safe, spotify_url) or orig_name
     return _enqueue(job)
 
 
@@ -834,6 +1026,40 @@ def active_count() -> int:
     для счётчика в UI (выдача list_jobs ограничена лимитом и занижала бы число)."""
     with _jobs_lock:
         return sum(1 for j in _jobs.values() if j.status in ("queued", "running"))
+
+
+def live_syncs() -> Dict[str, dict]:
+    """Какие плейлисты сейчас синкаются/ждут синка: {playlist_id: {status, job_id,
+    progress}} — для карточек плейлистов. «Синк всех» в очереди сюда не попадает:
+    до старта неизвестно, до какого плейлиста он дойдёт."""
+    out: Dict[str, dict] = {}
+    with _jobs_lock:
+        for jid in _jobs_order:
+            j = _jobs[jid]
+            if j.status not in ("queued", "running") or not j.playlist_id:
+                continue
+            if j.status == "queued" and j.kind != "sync":
+                continue
+            prev = out.get(j.playlist_id)
+            if prev and prev["status"] == "running":
+                continue
+            out[j.playlist_id] = {"status": j.status, "job_id": j.id,
+                                  "progress": j.progress.to_dict() if j.progress else None}
+    return out
+
+
+def queued_count() -> int:
+    with _jobs_lock:
+        return sum(1 for j in _jobs.values() if j.status == "queued")
+
+
+def last_sync() -> Optional[dict]:
+    """Самый свежий итог синка (для строки статуса в простое)."""
+    stats = playlist_stats()
+    if not stats:
+        return None
+    pid, entry = max(stats.items(), key=lambda kv: kv[1].get("ts") or 0)
+    return dict(entry, playlist_id=pid)
 
 
 def job_groups() -> List[dict]:
@@ -985,6 +1211,10 @@ def snapshot(limit: int = 50) -> dict:
         "jobs": list_jobs(limit),
         "active": active_count(),
         "groups": job_groups(),
+        "syncs": live_syncs(),
+        "queued": queued_count(),
+        "next_autosync": next_autosync(),
+        "last_sync": last_sync(),
     }
     _snapshot_cache = (rev_at_start, limit, now, payload)
     return payload

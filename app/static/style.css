@@ -331,55 +331,6 @@ ol.steps li + li { margin-top: 4px; }
 .tag.saved    { color: #d63a6a; background: color-mix(in srgb, #ff2d55 14%, transparent); }
 .tag.err      { color: var(--danger); background: var(--danger-soft); }
 
-/* ---------------------------------------------------------------- панель задач */
-#taskspanel {
-  position: fixed; right: 16px; bottom: 16px; width: 380px; max-width: calc(100vw - 32px);
-  background: color-mix(in srgb, var(--bg2) 92%, transparent);
-  -webkit-backdrop-filter: saturate(180%) blur(22px);
-  backdrop-filter: saturate(180%) blur(22px);
-  border: .5px solid var(--border); border-radius: 14px;
-  display: none; flex-direction: column; z-index: 50;
-  box-shadow: var(--shadow-lg); overflow: hidden;
-}
-#taskspanel.visible { display: flex; }
-#taskspanel.collapsed #taskslist,
-#taskspanel.collapsed #tasklog { display: none; }
-/* свёрнутая панель всегда по высоте шапки, даже если задан размер вручную */
-#taskspanel.collapsed { height: auto !important; }
-
-/* ручка изменения размера в левом-верхнем углу (панель закреплена за правый-нижний,
-   поэтому тянем именно отсюда → растёт влево-вверх, прочь от контента) */
-.task-resize {
-  position: absolute; top: 0; left: 0; width: 20px; height: 20px;
-  cursor: nwse-resize; z-index: 3; touch-action: none;
-}
-.task-resize::before {
-  content: ""; position: absolute; top: 6px; left: 6px; width: 7px; height: 7px;
-  border-top: 2px solid var(--muted); border-left: 2px solid var(--muted);
-  border-top-left-radius: 3px; opacity: .55;
-}
-.task-resize:hover::before { opacity: .9; }
-#taskspanel.collapsed .task-resize { display: none; }
-/* при заданной вручную высоте список занимает всё оставшееся место и сам скроллится */
-#taskspanel.resized #taskslist { flex: 1 1 auto; max-height: none; min-height: 0; }
-.taskshead { display: flex; align-items: center; gap: 8px; padding: 11px 13px; border-bottom: .5px solid var(--border); cursor: pointer; user-select: none; transition: background .12s; }
-.taskshead:hover { background: var(--fill); }
-.taskshead .title { font-weight: 600; font-size: 13.5px; }
-.taskshead .spacer { flex: 1; }
-/* индикатор свёрнуто/развёрнуто (не кнопка — кликабельна вся строка-шапка) */
-.collapse-ind { color: var(--muted); font-size: 12px; line-height: 1; padding: 0 4px; transition: transform .15s; }
-#taskslist { max-height: 340px; overflow-y: auto; }
-.taskrow {
-  display: flex; align-items: center; gap: 9px; padding: 9px 13px;
-  border-bottom: .5px solid var(--border); cursor: pointer; font-size: 12.5px;
-  transition: background .12s;
-}
-.taskrow:last-child { border-bottom: none; }
-.taskrow:hover { background: var(--fill); }
-.taskrow .tname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.taskrow.sel { background: var(--fill-strong); }
-.taskrow.group .tname { font-weight: 600; }   /* строка-агрегат плейлиста (прогресс X/Y) */
-
 /* цветной тег метода скачивания (как теги категорий на f95) */
 .srctag {
   display: inline-block; vertical-align: middle; margin-right: 7px;
@@ -392,8 +343,8 @@ ol.steps li + li { margin-top: 4px; }
 .srctag.src-upload  { background: #2f6fed; }                  /* файл — синий */
 .srctag.src-sync    { background: #0c8f9e; }                  /* синхрон — бирюзовый */
 #tasklog {
-  max-height: 280px; overflow-y: auto; padding: 11px 13px; margin: 0;
-  border-top: .5px solid var(--border);
+  max-height: 340px; overflow-y: auto; padding: 11px 13px; margin: 0;
+  border-bottom: .5px solid var(--border);
   font: 11px/1.55 "SF Mono", ui-monospace, Menlo, Consolas, monospace;
   white-space: pre-wrap; word-break: break-word; color: var(--fg); background: var(--console-bg);
 }
@@ -410,11 +361,94 @@ tr.row-done { opacity: .45; }
 .status.cancelled { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
 
 /* кнопки действий в строке задачи */
-.taskrow .tact { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0 2px; line-height: 1; transition: color .12s, transform .06s; }
-.taskrow .tact:active { transform: scale(.9); }
-.taskrow .tact.cancel:hover { color: var(--danger); }
-.taskrow .tact.remove:hover { color: var(--fg); }
-.taskrow .tact.copy:hover { color: var(--accent2); }
+.act-row .tact { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0 2px; line-height: 1; transition: color .12s, transform .06s; }
+.act-row .tact:active { transform: scale(.9); }
+.act-row .tact.cancel:hover { color: var(--danger); }
+.act-row .tact.remove:hover { color: var(--fg); }
+.act-row .tact.copy:hover { color: var(--accent2); }
+
+/* ---------------------------------------------------------------- прогресс */
+.pbar { height: 5px; border-radius: 3px; background: var(--fill); overflow: hidden; margin-top: 8px; }
+.pbar > i { display: block; height: 100%; width: 0; background: var(--accent2); border-radius: 3px; transition: width .6s ease; }
+/* неопределённый: идёт подготовка, сколько осталось — неизвестно */
+.pbar.indeterminate > i { width: 30%; animation: pbar-slide 1.4s ease-in-out infinite; }
+@keyframes pbar-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(340%); } }
+
+/* ---------------------------------------------------------------- строка статуса */
+/* одна карточка, процессы — строками через разделитель (три процесса сразу
+   не должны съедать полэкрана) */
+#status-strip {
+  background: var(--bg2); border: .5px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); margin-bottom: 16px; overflow: hidden;
+}
+#status-strip:empty { display: none; }
+.strip-item { padding: 11px 16px; }
+.strip-item + .strip-item { border-top: .5px solid var(--border); }
+.strip-item.clickable { cursor: pointer; transition: background .12s; }
+.strip-item.clickable:hover { background: var(--fill); }
+.strip-head { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.strip-icon {
+  flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 15px; background: color-mix(in srgb, var(--accent2) 14%, transparent); color: var(--accent2);
+}
+.strip-icon.ok { background: var(--accent-soft); color: var(--accent); }
+.strip-icon.spin { animation: spin 1.6s linear infinite; }
+.strip-icon.pulse { animation: pulse 1.6s ease-in-out infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse { 50% { opacity: .45; } }
+.strip-text { flex: 1; min-width: 0; }
+.strip-title { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.strip-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
+.strip-right { flex: none; text-align: right; }
+.strip-count { font-weight: 600; font-size: 14px; font-variant-numeric: tabular-nums; }
+.strip-extra { margin-top: 6px; }
+.strip-extra:empty { display: none; }
+
+/* ---------------------------------------------------------------- карточки плейлистов */
+.pl-cards { display: grid; gap: 10px; }
+.pl-card { margin-bottom: 0; overflow: visible; }
+.pl-card.syncing { border-color: color-mix(in srgb, var(--accent2) 40%, var(--border)); }
+.pl-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.pl-icon { flex: none; width: 22px; text-align: center; color: var(--muted); font-size: 15px; }
+.pl-name {
+  flex: 1; min-width: 0; font-weight: 600; font-size: 14.5px; color: var(--fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pl-name:hover { color: var(--accent2); }
+.pl-live .muted { margin-top: 6px; }
+.pl-meta { margin-top: 8px; }
+.pl-meta:empty { display: none; }
+.chip { flex: none; font-size: 11.5px; font-weight: 600; padding: 2px 9px; border-radius: 980px; white-space: nowrap; }
+.chip.accent { background: color-mix(in srgb, var(--accent2) 16%, transparent); color: var(--accent2); }
+.chip.ok     { background: var(--accent-soft); color: var(--accent); }
+.chip.warn   { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.chip.danger { background: var(--danger-soft); color: var(--danger); }
+.chip.muted  { background: var(--fill); color: var(--muted); }
+.empty-state { padding: 18px 16px; text-align: center; }
+.pl-head .pl-actions { flex: none; display: flex; gap: 6px; }
+/* телефон: имя и статус — первой строкой, кнопки — второй */
+@media (max-width: 560px) {
+  .pl-head { flex-wrap: wrap; row-gap: 8px; }
+  .pl-head .pl-actions { flex-basis: 100%; justify-content: flex-end; }
+  .strip-item { padding: 10px 13px; }
+}
+
+/* ---------------------------------------------------------------- активность */
+.card.activity { padding: 0; }
+.act-row {
+  display: flex; align-items: center; gap: 10px; padding: 11px 16px;
+  border-bottom: .5px solid var(--border); cursor: pointer; transition: background .12s;
+}
+.act-row:last-child { border-bottom: none; }
+.act-row:hover { background: var(--fill); }
+.act-row.sel { background: var(--fill-strong); }
+.act-main { flex: 1; min-width: 0; }
+.act-line { display: flex; align-items: center; min-width: 0; }
+.act-title { font-size: 13.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.act-row.group .act-title { font-weight: 600; }
+.act-detail { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.act-detail:empty { display: none; }
+.act-bar .pbar { margin-top: 7px; height: 4px; }
 
 /* ---------------------------------------------------------------- баннер окружения */
 .banner {
@@ -545,6 +579,5 @@ tr.row-done { opacity: .45; }
   main { padding: 14px 12px 48px; }
   header { gap: 12px; padding: 9px 13px; }
   .toolbar input[type=text] { min-width: 140px; }
-  #taskspanel { right: 8px; bottom: 8px; width: calc(100vw - 16px); }
   table { min-width: 540px; }
 }

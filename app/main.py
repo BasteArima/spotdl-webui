@@ -174,7 +174,17 @@ def index():
 # ------------------------------------------------------------------ playlists
 @app.get("/api/playlists", dependencies=[Depends(require_auth)])
 def api_list_playlists():
-    return {"playlists": [p.to_dict() for p in playlists.read_playlists()]}
+    """Плейлисты + сводка для карточек: треков по последнему синку, не найдено
+    сейчас, итог последнего синка. Живой статус синка — в /api/jobs (syncs)."""
+    stats = jobs.playlist_stats()
+    missing = {g["safe"]: len(g["tracks"]) for g in errors_parser.list_errors()}
+    out = []
+    for p in playlists.read_playlists():
+        d = p.to_dict()
+        d.update(tracks=jobs.playlist_track_count(p), not_found=missing.get(p.safe, 0),
+                 last_sync=stats.get(p.id))
+        out.append(d)
+    return {"playlists": out}
 
 
 @app.post("/api/playlists", dependencies=[Depends(require_auth)])
@@ -349,7 +359,10 @@ def api_jobs(limit: int = 50):
     # groups — агрегаты пакетных загрузок (плейлист целиком) с прогрессом X/Y для панели.
     # Снимок кэшируется по ревизии реестра: пока ничего не менялось, опрос панели
     # не гоняет три прохода по всему реестру заново.
-    return jobs.snapshot(lim)
+    snap = dict(jobs.snapshot(lim))
+    # апгрейд — не задача очереди, но его ход тоже в строку статуса
+    snap["upgrade"] = upgrade.controller.status()
+    return snap
 
 
 @app.post("/api/jobs/{job_id}/cancel", dependencies=[Depends(require_auth)])
