@@ -227,7 +227,9 @@ app/static/          index.html, app.js, style.css (тёмная SPA)
 Dockerfile           самодостаточный образ (ffmpeg+spotdl+deno+git+app)
 .github/workflows/build.yml  CI → GHCR
 docker-compose.yml   стек для Portainer (image из GHCR), env с комментариями
-README.md            полная документация (рус): деплой, env, источники, troubleshooting
+README.md            короткий вход: возможности, быстрый старт, первая настройка
+docs/                installation / configuration / sources / troubleshooting / development
+                     (при новой настройке/фиче обновлять configuration.md и sources.md)
 ```
 
 ## 12. Состояние / возможные следующие задачи

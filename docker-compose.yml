@@ -45,11 +45,11 @@ services:
       #
       # Spotify напрямую (librespot, 320k с Premium): кнопка «Spotify 320k» и
       # апгрейд качества. Креды — файлом /conf/zotify_credentials.json
-      # (см. README, раздел «Spotify напрямую»). Параметры:
+      # (docs/sources.md, «Spotify напрямую»). Параметры:
       # - ZOTIFY_QUALITY=very_high     # very_high=320k, high=160k, normal=96k
       #
       # Liked Songs (плейлист со ссылкой `saved`): своё Spotify-приложение и
-      # один вход — всё во вкладке «Настройки» webui (README, «Liked Songs»).
+      # один вход — всё во вкладке «Настройки» webui (docs/sources.md, «Liked Songs»).
       # Client ID/secret можно задать и здесь; env, если задан, важнее UI:
       # - SPOTIFY_CLIENT_ID=...
       # - SPOTIFY_CLIENT_SECRET=...
