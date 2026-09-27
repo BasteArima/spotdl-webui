@@ -261,6 +261,52 @@ def saved_songs() -> dict:
     return {"ok": True, "songs": songs}
 
 
+def _interactive() -> None:
+    cid, _secret, own = app_credentials()
+    if not own:
+        print("[warn] своё Spotify-приложение не настроено — пробую общий client_id spotdl.\n"
+              "       Скорее всего Spotify ответит «User not registered in the Developer\n"
+              "       Dashboard». Задайте приложение во вкладке «Настройки» webui.\n")
+    print("\n=== Шаг 1 ===")
+    print("Открой ссылку в браузере на ПК, войди в Spotify (можно через Facebook)")
+    print("и разреши доступ:\n")
+    print(authorize_url(cid))
+    print("\n=== Шаг 2 ===")
+    print(f"Браузер откроет {REDIRECT_URI}?code=... — страница НЕ загрузится, это нормально.")
+    print("Скопируй весь адрес из адресной строки.\n")
+
+    code, _state, error = parse_redirect(input("Вставь адрес (или только code) и нажми Enter: "))
+    if error:
+        print(f"[error] Spotify: {error}", file=sys.stderr)
+        sys.exit(2)
+    if not code:
+        print("[error] пустой code", file=sys.stderr)
+        sys.exit(2)
+
+    print("\nПолучаю токен...")
+    res = exchange(code)
+    if not res["ok"]:
+        print(f"[error] {res['error']}", file=sys.stderr)
+        if res.get("hint"):
+            print(f"        {res['hint']}", file=sys.stderr)
+        sys.exit(1)
+    print(f"\n✅ Готово: вошли как {res['user']}, в Liked Songs треков: {res['total']}.")
+    print("Теперь добавьте в UI плейлист со ссылкой `saved` и нажмите Sync.")
+
+
+def _exchange_cli() -> None:
+    """Режим для веба: code из stdin (не в argv — его видно в ps), ответ —
+    ОДНА JSON-строка последней строкой stdout."""
+    code = sys.stdin.readline().strip()
+    try:
+        res = exchange(code) if code else {"ok": False, "error": "пустой code"}
+    except Exception as exc:  # noqa: BLE001 — веб должен получить JSON, а не трейсбек
+        res = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    # ASCII-JSON: веб разбирает вывод независимо от локали подпроцесса
+    print(json.dumps(res), flush=True)
+    sys.exit(0 if res.get("ok") else 1)
+
+
 def _saved_songs_cli(out_path: str) -> None:
     """Режим для синка Liked Songs: треки пишутся в out_path (список в формате
     spotdl), в stdout — ASCII-JSON {"ok", "count"} последней строкой."""

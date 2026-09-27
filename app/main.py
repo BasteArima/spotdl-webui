@@ -579,6 +579,8 @@ def api_spotify_login_finish(body: SpotifyLoginIn):
                            text=True, timeout=60)
         lines = [ln for ln in (r.stdout or "").splitlines() if ln.strip()]
         res = json.loads(lines[-1]) if lines else {}
+        if not res:   # подпроцесс упал, не напечатав JSON, — покажем почему
+            res = {"ok": False, "error": "неожиданный ответ: " + ((r.stderr or "").strip()[-300:] or "пусто")}
     except subprocess.TimeoutExpired:
         res = {"ok": False, "error": "Spotify не ответил за 60 с"}
     except ValueError:
