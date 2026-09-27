@@ -51,7 +51,14 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
    Кнопка «Spotify 320k». Нужны креды (см. §5).
 4. **Заливка файла** ([place_localfile.py](app/place_localfile.py)) — кнопка «📁 Файл»:
    локальный файл → мета/обложка со Spotify → в библиотеку.
-5. **Резолв имён** ([resolve_names.py](app/resolve_names.py), `/api/resolve-names`):
+5. **Liked Songs** — запись `Имя|saved` в `playlists.txt` → `spotdl sync saved
+   --user-auth --headless --cache-path /conf/.spotify-user-token.json` (+ свои
+   `--client-id/--client-secret`). Токен создаёт один раз
+   [spotify_login.py](app/spotify_login.py) (OAuth, redirect `127.0.0.1:9900`, scope
+   как у spotdl — иначе spotipy сочтёт кэш невалидным). Без токена sync этой записи
+   пропускается ДО сброса errors-файла. Нужно СВОЁ приложение Spotify: общий
+   client_id spotdl в dev-режиме не пускает чужих пользователей.
+6. **Резолв имён** ([resolve_names.py](app/resolve_names.py), `/api/resolve-names`):
    когда spotdl записал в errors битое имя (`musicShelfRenderer`), фронт лениво
    дорезолвливает настоящее имя со Spotify (публичный клиент, логин не нужен).
 
@@ -77,6 +84,10 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
 - `APP_AUTH_TOKEN` — пароль входа в UI (env).
 - `/conf/cookies.txt` — YouTube cookies (Netscape).
 - `/conf/deezer_arl.txt` или `DEEZER_ARL` — Deezer ARL.
+- `/conf/spotify_app.json` (пишется из вкладки «Настройки», `settings.set_spotify_app`,
+  mode 600; секрет в API наружу не отдаётся) / `SPOTIFY_CLIENT_ID`+`SPOTIFY_CLIENT_SECRET`
+  (env важнее UI) — своё Spotify-приложение; смена client_id удаляет токен входа; `/conf/.spotify-user-token.json` — OAuth-токен пользователя
+  (refresh). `--client-secret` маскируется в логах задач (`jobs._redact`).
 - `/conf/zotify_credentials.json` — креды librespot. Пользователь входит в Spotify
   **через Facebook** → username/password НЕ работает. Генерация только через **OAuth**:
   `docker exec -it spotdl-webui python -m app.gen_zotify_creds /conf/zotify_credentials.json`
@@ -135,7 +146,7 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
 
 - UI-текст и комментарии — **на русском**.
 - Коммит/пуш — **только по явной просьбе пользователя**. Он на `main` (это деплой-ветка,
-  с неё CI). Сообщения коммита заканчивать `Co-Authored-By: Claude …`.
+  с неё CI). Коммитить **без** трейлера `Co-Authored-By` и любой атрибуции ИИ (явное требование пользователя).
 - При фиксах больших фич — был прогон `/code-review` перед запуском апгрейда. Полезно
   повторять для рискованных изменений (тысячи треков).
 - PowerShell vs Bash: для многострочного `git commit -m` в Bash используй `-F -` с
@@ -160,6 +171,7 @@ app/deezer_dl.py     Deezer-фолбэк CLI
 app/place_localfile.py заливка локального файла CLI
 app/resolve_names.py резолв реальных имён со Spotify CLI
 app/gen_zotify_creds.py OAuth-генерация credentials.json (FB-вход)
+app/spotify_login.py OAuth-вход пользователя для Liked Songs (spotdl `saved`)
 app/settings.py      рантайм-настройки (безопасный режим)
 app/upgrade.py       Step 2: массовый апгрейд (контроллер + воркер)
 app/static/          index.html, app.js, style.css (тёмная SPA)

@@ -8,7 +8,8 @@ import subprocess
 import tempfile
 from typing import Optional
 
-from . import config
+from . import config, playlists
+from .naming import is_saved
 
 _spotdl_version: Optional[str] = None
 
@@ -53,6 +54,7 @@ def environment_status() -> dict:
         "spotdl_version": _spotdl_ver(),
         "deezer_configured": bool(config.deezer_arl()),
         "zotify_configured": config.zotify_configured(),
+        "spotify_user_login": config.spotify_user_logged_in(),
     }
     # человекочитаемые предупреждения для баннера
     warnings = []
@@ -62,6 +64,13 @@ def environment_status() -> dict:
         warnings.append("Папка музыки недоступна на запись (uid 998) — новые треки не сохранятся.")
     if not checks["playlists_writable"]:
         warnings.append("Папка playlists недоступна на запись — m3u не обновится.")
+    if not checks["spotify_user_login"] and any(is_saved(p.url) for p in playlists.read_playlists()):
+        if not config.spotify_app()[0]:
+            warnings.append("Liked Songs не синхронизируются: задайте Spotify-приложение во "
+                            "вкладке «Настройки», затем выполните вход.")
+        else:
+            warnings.append("Liked Songs не синхронизируются: нет входа в Spotify. Один раз выполните "
+                            "на сервере: docker exec -it spotdl-webui python -m app.spotify_login")
     if not checks["deno"]:
         warnings.append("Deno не найден — загрузки с YouTube будут падать (AudioProviderError).")
     checks["warnings"] = warnings

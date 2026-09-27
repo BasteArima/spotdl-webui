@@ -193,6 +193,8 @@ docker run --rm -p 4535:8000 -e APP_AUTH_TOKEN=dev \
 | `UPLOAD_BITRATE` | `320k` | Битрейт конвертации (заливка, Deezer, Spotify-апгрейд). 320k — максимум Spotify. `auto` — не форсировать. |
 | `DEEZER_ARL` | — | ARL-токен Deezer для фолбэка. Альтернатива — файл `/conf/deezer_arl.txt`. Без него кнопка Deezer вернёт 400. |
 | `ZOTIFY_CREDENTIALS_FILE` | `/conf/zotify_credentials.json` | Путь к credentials.json Zotify (создаётся при первом логине). |
+| `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | — | Своё Spotify-приложение для входа под аккаунтом (нужно для Liked Songs). Обычно задаётся во вкладке «Настройки» (`/conf/spotify_app.json`); env, если задан, важнее. См. «Liked Songs». |
+| `SPOTIFY_USER_TOKEN_FILE` | `/conf/.spotify-user-token.json` | OAuth-токен пользователя для Liked Songs (создаётся `app.spotify_login`). |
 | `ZOTIFY_USERNAME` / `ZOTIFY_PASSWORD` | — | Альтернатива credentials.json — логин/пароль Spotify (хуже, секрет в конфиге). |
 | `ZOTIFY_QUALITY` | `very_high` | `very_high`=320k (нужен Premium), `high`=160k, `normal`=96k, `auto`=макс. для аккаунта. |
 | `ZOTIFY_SAFE_MODE` | `true` | Безопасный режим: одиночные «Spotify 320k» качать в **real-time** (скорость прослушивания, анти-бан). Массовая закачка и апгрейд — всегда real-time; при включённом режиме у массовой ещё пауза между треками. Тумблер в UI. |
@@ -294,6 +296,43 @@ docker exec -it spotdl-webui python -m app.gen_zotify_creds /conf/zotify_credent
 > Это Step 1 (ручная кнопка). Фоновый массовый «апгрейд качества» (медленная
 > замена YouTube-треков на 320k неделями, с прогрессом в UI) — следующий шаг,
 > после подтверждения, что авторизация и скачивание работают на сервере.
+
+## Liked Songs (Любимые треки)
+
+У «Любимых треков» нет ссылки — spotdl скачивает их по спецзапросу `saved`, читая
+библиотеку **от имени пользователя** (OAuth). Настраивается один раз.
+
+**1. Своё Spotify-приложение.** Общий client_id spotdl в dev-режиме пускает только
+пользователей из своего allowlist, поэтому нужно своё (бесплатно, 2 минуты):
+
+- [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) →
+  **Create app**. Имя не должно начинаться со «Spot».
+- **Redirect URIs:** `http://127.0.0.1:9900/` — точь-в-точь, со слэшем, и нажать **Add**.
+- **Which API/SDKs:** только **Web API**. Save.
+- В **Settings** приложения взять **Client ID** и **Client secret** и ввести их в
+  webui во вкладке **«Настройки»** (сохраняются в `/conf/spotify_app.json` с правами
+  600; секрет обратно в браузер не отдаётся). Альтернатива — env
+  `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET`: если заданы, они важнее UI и поля
+  там блокируются. При смене приложения старый вход сбрасывается — войти заново.
+
+**2. Вход (один раз), прямо на сервере:**
+
+```sh
+docker exec -it spotdl-webui python -m app.spotify_login
+```
+
+Скрипт печатает ссылку → открыть на ПК, войти (можно через Facebook), разрешить
+доступ → браузер откроет `http://127.0.0.1:9900/?code=…` (страница НЕ загрузится —
+это нормально) → скопировать весь адрес и вставить в терминал. Скрипт проверит
+доступ и напишет, сколько треков в Liked Songs. Токен ляжет в
+`/conf/.spotify-user-token.json` и дальше обновляется сам.
+
+**3. В UI** добавить плейлист, например `Liked Songs`, со ссылкой **`saved`** и нажать
+Sync. Автосинк подхватывает новые лайки по расписанию, как у обычных плейлистов.
+
+Если входа нет, sync этой записи пропускается с подсказкой в логе задачи, а в UI
+висит баннер. После отзыва доступа в аккаунте Spotify или смены приложения
+вход надо повторить.
 
 ## Cookies для YouTube
 
@@ -462,6 +501,7 @@ app/
   spotify_dl.py    одноразовое скачивание одного трека (ручные кнопки)
   spotify_worker.py  долгоживущий воркер: ОДНА авторизация librespot на весь апгрейд
   gen_zotify_creds.py  одноразовая генерация credentials.json через OAuth (FB-вход)
+  spotify_login.py     одноразовый OAuth-вход для Liked Songs (spotdl `saved`)
   settings.py      рантайм-настройки (безопасный режим) в /conf, тумблер в UI
   upgrade.py       Step 2: фоновый массовый апгрейд библиотеки до 320k с метками
   jobs.py          две дорожки очереди, воркеры, лок, запуск spotdl, планировщик

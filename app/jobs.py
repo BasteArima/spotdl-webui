@@ -23,6 +23,7 @@ import time
 from typing import Callable, Dict, List, Optional
 
 from . import config, errors_parser, playlists
+from .naming import is_saved
 
 # ------------------------------------------------------------------ состояние
 _jobs: Dict[str, "Job"] = {}
@@ -284,6 +285,17 @@ def _terminate_proc(proc) -> None:
             pass
 
 
+# Значения этих флагов не пишем ни в лог задачи, ни в docker logs.
+_SECRET_FLAGS = {"--client-secret"}
+
+
+def _redact(cmd: List[str]) -> str:
+    out = []
+    for i, part in enumerate(cmd):
+        out.append("***" if i and cmd[i - 1] in _SECRET_FLAGS else part)
+    return " ".join(out)
+
+
 def _run_process(job: Job, cmd: List[str], cwd: str = "/",
                  timeout: Optional[float] = None, kill_on_cancel: bool = True):
     """Запускает процесс, построчно пишет stdout/stderr в лог задачи И в stdout
@@ -297,13 +309,17 @@ def _run_process(job: Job, cmd: List[str], cwd: str = "/",
     kill_on_cancel=False (sync): отмену НЕ форсируем убийством — текущий spotdl
     доработает и запишет m3u/save-file целиком, а sync-all остановится между
     плейлистами (мягко, без риска порчи файлов)."""
-    job.append("$ " + " ".join(cmd))
+    job.append("$ " + _redact(cmd))
     env = dict(os.environ)
     env.setdefault("PYTHONUNBUFFERED", "1")
     out_lines: List[str] = []
     try:
         proc = subprocess.Popen(
             cmd,
+            # stdin закрыт: если подпроцесс вдруг попросит ввод (напр. spotipy
+            # при протухшем OAuth-токене Liked Songs) — сразу EOF и ошибка,
+            # а не вечное ожидание, блокирующее очередь.
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -380,15 +396,39 @@ def _common_output_args() -> List[str]:
     ]
 
 
+LOGIN_HINT = ("нет входа в Spotify — один раз выполните на сервере: "
+              "docker exec -it spotdl-webui python -m app.spotify_login")
+
+
+class SpotifyLoginRequired(RuntimeError):
+    """Для Liked Songs нужен OAuth-токен пользователя, а его ещё нет."""
+
+
+def _user_auth_args() -> List[str]:
+    """Флаги OAuth-входа для запроса `saved` (Liked Songs). Токен берётся из
+    кэша, созданного app.spotify_login; --headless — чтобы spotipy не пытался
+    открыть браузер/поднять сервер на 9900 внутри контейнера."""
+    args = ["--user-auth", "--headless", "--cache-path", config.SPOTIFY_USER_TOKEN_FILE]
+    cid, secret = config.spotify_app()
+    if cid and secret:
+        # refresh-токен привязан к приложению, выдавшему его, — те же id/secret,
+        # что использовал app.spotify_login.
+        args += ["--client-id", cid, "--client-secret", secret]
+    return args
+
+
 def sync_args(pl: playlists.Playlist) -> List[str]:
     os.makedirs(config.ERRORS_DIR, exist_ok=True)
     os.makedirs(config.PLAYLISTS_M3U_DIR, exist_ok=True)
-    return [
+    args = [
         "sync", pl.url,
         "--save-file", config.savefile_path(pl.id),
         "--save-errors", config.errors_path(pl.safe),
         "--m3u", config.m3u_path(pl.safe),
     ] + _common_output_args()
+    if is_saved(pl.url):
+        args += _user_auth_args()
+    return args
 
 
 def download_match_args(youtube_url: str, spotify_url: str) -> List[str]:
@@ -411,6 +451,9 @@ def _reset_errors_file(safe: str) -> None:
 
 def _sync_locked(job: Job, pl: playlists.Playlist) -> None:
     """Sync плейлиста под локом со сбросом errors-файла (защита от дублей)."""
+    if is_saved(pl.url) and not config.spotify_user_logged_in():
+        # иначе spotdl упадёт на запросе ввода, а errors-файл уже будет сброшен
+        raise SpotifyLoginRequired(f"{pl.name}: {LOGIN_HINT}")
     with PlaylistLock(pl.id, job):
         _reset_errors_file(pl.safe)
         # мягкая отмена: текущий spotdl допишет m3u/save-file, sync-all встанет
@@ -436,6 +479,8 @@ def _run_sync_all(job: Job) -> None:
             _sync_locked(job, pl)
         except TimeoutError as e:
             job.append(f"[skip] {pl.name}: {e}")
+        except SpotifyLoginRequired as e:
+            job.append(f"[skip] {e}")
 
 
 def m3u_append_args(spotify_url: str, safe: str) -> List[str]:

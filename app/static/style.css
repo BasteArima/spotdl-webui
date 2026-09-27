@@ -290,6 +290,13 @@ tr:hover td { background: color-mix(in srgb, var(--fill) 55%, transparent); }
 .tag.album    { color: #0a84ff; background: color-mix(in srgb, #0a84ff 14%, transparent); }
 .tag.track    { color: #c47a00; background: color-mix(in srgb, #ff9f0a 18%, transparent); }
 .tag.artist   { color: #a850d8; background: color-mix(in srgb, #af52de 16%, transparent); }
+.form-grid {
+  display: grid; grid-template-columns: max-content minmax(0, 360px);
+  gap: 9px 14px; align-items: center; margin-top: 14px;
+}
+.form-grid label { color: var(--muted); font-size: 12.5px; font-weight: 500; }
+@media (max-width: 560px) { .form-grid { grid-template-columns: minmax(0, 1fr); } }
+.tag.saved    { color: #d63a6a; background: color-mix(in srgb, #ff2d55 14%, transparent); }
 .tag.err      { color: var(--danger); background: var(--danger-soft); }
 
 /* ---------------------------------------------------------------- панель задач */

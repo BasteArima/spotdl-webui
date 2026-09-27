@@ -322,6 +322,32 @@ def api_set_settings(body: SettingsIn):
     return {"safe_mode": settings.set_safe_mode(body.safe_mode)}
 
 
+class SpotifyAppIn(BaseModel):
+    client_id: str
+    client_secret: str = ""   # пусто = оставить сохранённый
+
+
+@app.get("/api/spotify-app", dependencies=[Depends(require_auth)])
+def api_get_spotify_app():
+    return settings.spotify_app_status()
+
+
+@app.post("/api/spotify-app", dependencies=[Depends(require_auth)])
+def api_set_spotify_app(body: SpotifyAppIn):
+    try:
+        return settings.set_spotify_app(body.client_id, body.client_secret)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/spotify-app", dependencies=[Depends(require_auth)])
+def api_clear_spotify_app():
+    try:
+        return settings.clear_spotify_app()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 # ---- массовый апгрейд качества (Step 2) ----
 @app.get("/api/upgrade/status", dependencies=[Depends(require_auth)])
 def api_upgrade_status():

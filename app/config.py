@@ -98,6 +98,43 @@ UPGRADE_PER_DAY = _int_env("UPGRADE_PER_DAY", 0)
 DOWNLOAD_TRACK_TIMEOUT = _int_env("DOWNLOAD_TRACK_TIMEOUT", 3600)
 
 
+# --- Liked Songs (spotdl-запрос `saved`) --------------------------------------
+# У «Любимых треков» нет ссылки: spotdl качает их по запросу `saved`, и только
+# с OAuth-входом пользователя (--user-auth). Токен с refresh'ем кэширует spotipy
+# в этом файле; создаётся один раз командой `python -m app.spotify_login`.
+SPOTIFY_USER_TOKEN_FILE = os.environ.get(
+    "SPOTIFY_USER_TOKEN_FILE", os.path.join(CONF_DIR, ".spotify-user-token.json"))
+# Своё приложение Spotify (developer.spotify.com) для этого входа. Общий
+# client_id spotdl в dev-режиме пускает только allowlist → нужен свой.
+# Env или файл /conf/spotify_app.json: {"client_id": "...", "client_secret": "..."}.
+SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID", "")
+SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET", "")
+SPOTIFY_APP_FILE = os.environ.get("SPOTIFY_APP_FILE", os.path.join(CONF_DIR, "spotify_app.json"))
+
+
+def spotify_app() -> tuple:
+    """(client_id, client_secret) своего Spotify-приложения: env (приоритет) →
+    /conf/spotify_app.json → ("", ""), тогда используется дефолт spotdl."""
+    cid, secret = SPOTIFY_CLIENT_ID.strip(), SPOTIFY_CLIENT_SECRET.strip()
+    if cid and secret:
+        return cid, secret
+    try:
+        import json
+        with open(SPOTIFY_APP_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        cid = str(data.get("client_id") or "").strip()
+        secret = str(data.get("client_secret") or "").strip()
+        if cid and secret:
+            return cid, secret
+    except (OSError, ValueError, AttributeError):
+        pass
+    return "", ""
+
+
+def spotify_user_logged_in() -> bool:
+    return os.path.exists(SPOTIFY_USER_TOKEN_FILE)
+
+
 def zotify_configured() -> bool:
     if os.path.exists(ZOTIFY_CREDENTIALS_FILE):
         return True

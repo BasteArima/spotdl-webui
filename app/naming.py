@@ -9,6 +9,13 @@ _BAD_CHARS = re.compile(r'[/\\:*?"<>|]')
 _MULTISPACE = re.compile(r" +")
 # /(playlist|album|track|artist)/ в spotify-ссылке
 _TYPE_RE = re.compile(r"open\.spotify\.com/(playlist|album|track|artist)/", re.IGNORECASE)
+# Спецзапрос spotdl для «Любимых треков» (Liked Songs): ссылки у них нет.
+SAVED_QUERY = "saved"
+
+
+def is_saved(url: str) -> bool:
+    """Запись плейлиста — это Liked Songs (spotdl-запрос `saved`)?"""
+    return (url or "").strip().lower() == SAVED_QUERY
 
 
 def safe_name(name: str) -> str:
@@ -34,6 +41,8 @@ def playlist_id(url: str) -> str:
 
 
 def url_type(url: str) -> str:
-    """playlist / album / track / artist / unknown."""
+    """playlist / album / track / artist / saved / unknown."""
+    if is_saved(url):
+        return "saved"
     m = _TYPE_RE.search(url or "")
     return m.group(1).lower() if m else "unknown"

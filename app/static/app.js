@@ -183,7 +183,49 @@ document.querySelectorAll("nav button").forEach(b => {
     if (view === "playlists") loadPlaylists();
     if (view === "upgrade") loadUpgrade();
     if (view === "jobs") loadJobs();
+    if (view === "settings") loadSpotifyApp();
   });
+});
+
+// ------------------------------------------------------------------ настройки: Spotify-приложение
+function renderSpotifyApp(s) {
+  const id = document.getElementById("sp-client-id");
+  const secret = document.getElementById("sp-client-secret");
+  const env = s.source === "env";
+  id.value = s.client_id || "";
+  secret.value = "";   // секрет с сервера не приходит никогда
+  secret.placeholder = s.has_secret ? "сохранён — оставьте пустым, чтобы не менять" : "32 символа";
+  id.disabled = secret.disabled = env;
+  document.getElementById("sp-save").disabled = env;
+  document.getElementById("sp-clear").disabled = env || !s.source;
+  const src = { env: "переменные окружения (важнее настроек UI)", file: "настройки UI", "": "не задано" }[s.source];
+  document.getElementById("sp-status").innerHTML =
+    `<span class="muted">Источник:</span> ${esc(src)} · <span class="muted">Вход в Spotify:</span> ` +
+    (s.logged_in ? "✅ выполнен" : "— не выполнен");
+  document.getElementById("sp-login-hint").style.display = (s.source && !s.logged_in) ? "" : "none";
+}
+async function loadSpotifyApp() {
+  document.getElementById("sp-err").textContent = "";
+  try { renderSpotifyApp(await api("GET", "/api/spotify-app")); }
+  catch (e) { document.getElementById("sp-err").textContent = e.message; }
+}
+document.getElementById("sp-save").addEventListener("click", async () => {
+  const errEl = document.getElementById("sp-err");
+  errEl.textContent = "";
+  try {
+    const s = await api("POST", "/api/spotify-app", {
+      client_id: document.getElementById("sp-client-id").value,
+      client_secret: document.getElementById("sp-client-secret").value,
+    });
+    renderSpotifyApp(s);
+    toast(s.relogin_required ? "Сохранено. Приложение сменилось — войдите в Spotify заново" : "Сохранено");
+    loadStatus();
+  } catch (e) { errEl.textContent = e.message; }
+});
+document.getElementById("sp-clear").addEventListener("click", async () => {
+  if (!confirm("Удалить Spotify-приложение и токен входа? Liked Songs перестанут синхронизироваться.")) return;
+  try { renderSpotifyApp(await api("DELETE", "/api/spotify-app")); toast("Удалено"); loadStatus(); }
+  catch (e) { document.getElementById("sp-err").textContent = e.message; }
 });
 
 // ------------------------------------------------------------------ ненайденные
@@ -483,7 +525,9 @@ async function loadPlaylists() {
       tb.appendChild(el("tr", {}, [
         el("td", {}, [p.name]),
         el("td", {}, [el("span", { class: "tag " + p.type }, [p.type])]),
-        el("td", {}, [el("a", { href: p.url, target: "_blank", rel: "noopener", class: "small pl-url", title: p.url }, [p.url])]),
+        // у Liked Songs (`saved`) ссылки нет — ведём на коллекцию в веб-плеере
+        el("td", {}, [el("a", { href: p.type === "saved" ? "https://open.spotify.com/collection/tracks" : p.url,
+                                target: "_blank", rel: "noopener", class: "small pl-url", title: p.url }, [p.url])]),
         el("td", {}, [el("div", { class: "pl-actions" }, [syncBtn, editBtn, delBtn])]),
       ]));
     });

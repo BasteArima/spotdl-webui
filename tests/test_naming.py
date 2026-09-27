@@ -70,6 +70,8 @@ def test_url_type():
     assert url_type("https://open.spotify.com/track/15xVX45khwdkd5RACVBAgb") == "track"
     assert url_type("https://open.spotify.com/artist/abc") == "artist"
     assert url_type("https://example.com/foo") == "unknown"
+    assert url_type("saved") == "saved"
+    assert url_type(" Saved ") == "saved"
 
 
 SAMPLE_ERRORS = """2026-06-09-10-09-33

@@ -29,6 +29,7 @@
         <button data-view="playlists">Плейлисты</button>
         <button data-view="upgrade">Апгрейд 320k</button>
         <button data-view="jobs">Задачи</button>
+        <button data-view="settings">Настройки</button>
       </nav>
       <span class="spacer"></span>
       <label class="small muted" id="safe-mode-label" title="Одиночные «Spotify 320k» качать в real-time (скорость прослушивания, анти-бан). Массовая закачка и апгрейд — всегда real-time." style="display:flex;align-items:center;gap:6px;cursor:pointer">
@@ -99,6 +100,37 @@
       </div>
     </section>
 
+    <!-- ============ Настройки ============ -->
+    <section class="view" id="view-settings">
+      <div class="card">
+        <strong>Spotify-приложение (для Liked Songs)</strong>
+        <div class="muted small" style="max-width:640px; margin-top:4px">
+          Нужно, чтобы синхронизировать «Любимые треки» (плейлист со ссылкой <code>saved</code>).
+          Создайте приложение на
+          <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">developer.spotify.com</a>:
+          Redirect URI <code>http://127.0.0.1:9900/</code>, API — Web API. Client ID и secret — в Settings приложения.
+        </div>
+        <div id="sp-status" class="small" style="margin-top:12px"></div>
+        <div class="form-grid">
+          <label for="sp-client-id">Client ID</label>
+          <input id="sp-client-id" type="text" autocomplete="off" spellcheck="false" placeholder="32 символа">
+          <label for="sp-client-secret">Client secret</label>
+          <input id="sp-client-secret" type="password" autocomplete="new-password" spellcheck="false" placeholder="32 символа">
+        </div>
+        <div class="err-msg" id="sp-err"></div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn" id="sp-save">Сохранить</button>
+          <button class="btn danger" id="sp-clear">Удалить</button>
+        </div>
+        <div class="muted small" id="sp-login-hint" style="margin-top:14px; max-width:640px">
+          После сохранения один раз войдите в Spotify на сервере:<br>
+          <code>docker exec -it spotdl-webui python -m app.spotify_login</code><br>
+          Откройте напечатанную ссылку, войдите, скопируйте адрес страницы
+          <code>127.0.0.1:9900/?code=…</code> (она не загрузится — это нормально) и вставьте в терминал.
+        </div>
+      </div>
+    </section>
+
     <!-- ============ Задачи ============ -->
     <section class="view" id="view-jobs">
       <div class="toolbar">
@@ -131,7 +163,7 @@
       <h2 id="pl-modal-title">Добавить плейлист</h2>
       <label>Отображаемое имя</label>
       <input id="pl-modal-name" type="text" placeholder="NieR: Automata OST">
-      <label>Spotify-ссылка (playlist / album / track / artist)</label>
+      <label>Spotify-ссылка (playlist / album / track / artist) или <code>saved</code> — Liked Songs</label>
       <input id="pl-modal-url" type="text" placeholder="https://open.spotify.com/playlist/…">
       <div class="err-msg" id="pl-modal-err"></div>
       <div class="actions">

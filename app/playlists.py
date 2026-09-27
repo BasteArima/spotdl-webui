@@ -10,7 +10,7 @@ import tempfile
 from typing import List, Optional
 
 from . import config
-from .naming import playlist_id, safe_name, url_type
+from .naming import SAVED_QUERY, is_saved, playlist_id, safe_name, url_type
 
 
 class Playlist:
@@ -102,9 +102,16 @@ def _raw_lines() -> List[str]:
         return [ln.rstrip("\n") for ln in fh]
 
 
+def _normalize_url(url: str) -> str:
+    """`Saved`/` saved ` → канонический `saved`: от строки считается id
+    save-файла, поэтому написание должно быть одно."""
+    url = url.strip()
+    return SAVED_QUERY if is_saved(url) else url
+
+
 def add_playlist(name: str, url: str) -> Playlist:
     name = name.rstrip()
-    url = url.strip()
+    url = _normalize_url(url)
     if not name or not url:
         raise ValueError("Имя и ссылка обязательны")
     if "|" in name:
@@ -140,7 +147,7 @@ def delete_playlist(url: str) -> bool:
 
 def update_playlist(old_url: str, name: str, url: str) -> Playlist:
     name = name.rstrip()
-    url = url.strip()
+    url = _normalize_url(url)
     if not name or not url:
         raise ValueError("Имя и ссылка обязательны")
     if "|" in name:
