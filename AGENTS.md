@@ -53,9 +53,14 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
    локальный файл → мета/обложка со Spotify → в библиотеку.
 5. **Liked Songs** — запись `Имя|saved` в `playlists.txt` → `spotdl sync saved
    --user-auth --headless --cache-path /conf/.spotify-user-token.json` (+ свои
-   `--client-id/--client-secret`). Токен создаёт один раз
-   [spotify_login.py](app/spotify_login.py) (OAuth, redirect `127.0.0.1:9900`, scope
-   как у spotdl — иначе spotipy сочтёт кэш невалидным). Без токена sync этой записи
+   `--client-id/--client-secret`). Токен создаёт вход из UI («Настройки» → «Войти в
+   Spotify»): веб строит authorize-URL сам (`spotify_login.authorize_url`, с `state`
+   в памяти, TTL 15 мин), пользователь вставляет адрес `127.0.0.1:9900/?code=…`,
+   обмен code — в ПОДПРОЦЕССЕ `python -m app.spotify_login --exchange` (code через
+   stdin, ответ — ASCII-JSON последней строкой), чтобы spotipy не жил в веб-процессе.
+   CLI-вход `docker exec -it … python -m app.spotify_login` оставлен запасным.
+   Redirect `127.0.0.1:9900` и scope — как у spotdl, иначе spotipy сочтёт кэш
+   невалидным. Без токена sync этой записи
    пропускается ДО сброса errors-файла. Нужно СВОЁ приложение Spotify: общий
    client_id spotdl в dev-режиме не пускает чужих пользователей.
 6. **Резолв имён** ([resolve_names.py](app/resolve_names.py), `/api/resolve-names`):
@@ -171,7 +176,7 @@ app/deezer_dl.py     Deezer-фолбэк CLI
 app/place_localfile.py заливка локального файла CLI
 app/resolve_names.py резолв реальных имён со Spotify CLI
 app/gen_zotify_creds.py OAuth-генерация credentials.json (FB-вход)
-app/spotify_login.py OAuth-вход пользователя для Liked Songs (spotdl `saved`)
+app/spotify_login.py OAuth-вход для Liked Songs: authorize-URL, обмен code (--exchange), CLI
 app/settings.py      рантайм-настройки (безопасный режим)
 app/upgrade.py       Step 2: массовый апгрейд (контроллер + воркер)
 app/static/          index.html, app.js, style.css (тёмная SPA)

@@ -296,6 +296,9 @@ tr:hover td { background: color-mix(in srgb, var(--fill) 55%, transparent); }
 }
 .form-grid label { color: var(--muted); font-size: 12.5px; font-weight: 500; }
 @media (max-width: 560px) { .form-grid { grid-template-columns: minmax(0, 1fr); } }
+.settings-sub { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
+ol.steps { margin: 0 0 10px; padding-left: 20px; line-height: 1.55; }
+ol.steps li + li { margin-top: 4px; }
 .tag.saved    { color: #d63a6a; background: color-mix(in srgb, #ff2d55 14%, transparent); }
 .tag.err      { color: var(--danger); background: var(--danger-soft); }
 

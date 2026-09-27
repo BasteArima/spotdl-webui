@@ -122,11 +122,27 @@
           <button class="btn" id="sp-save">Сохранить</button>
           <button class="btn danger" id="sp-clear">Удалить</button>
         </div>
-        <div class="muted small" id="sp-login-hint" style="margin-top:14px; max-width:640px">
-          После сохранения один раз войдите в Spotify на сервере:<br>
-          <code>docker exec -it spotdl-webui python -m app.spotify_login</code><br>
-          Откройте напечатанную ссылку, войдите, скопируйте адрес страницы
-          <code>127.0.0.1:9900/?code=…</code> (она не загрузится — это нормально) и вставьте в терминал.
+        <div id="sp-login" class="settings-sub" style="display:none">
+          <strong>Вход в Spotify</strong>
+          <div id="sp-login-status" class="small" style="margin-top:6px"></div>
+          <div class="row" style="margin-top:10px">
+            <button class="btn" id="sp-login-start">Войти в Spotify</button>
+            <button class="btn secondary" id="sp-logout">Выйти</button>
+          </div>
+          <div id="sp-login-steps" style="display:none; margin-top:12px; max-width:640px">
+            <ol class="small steps">
+              <li><a id="sp-login-link" href="#" target="_blank" rel="noopener">Откройте страницу входа Spotify ↗</a>,
+                войдите (можно через Facebook) и разрешите доступ.</li>
+              <li>Браузер откроет <code>127.0.0.1:9900/?code=…</code> — страница не загрузится, это нормально.
+                Скопируйте адрес из адресной строки и вставьте сюда:</li>
+            </ol>
+            <div class="row">
+              <input id="sp-login-redirect" type="text" autocomplete="off" spellcheck="false"
+                     placeholder="http://127.0.0.1:9900/?code=…" style="flex:1; min-width:240px">
+              <button class="btn" id="sp-login-finish">Завершить вход</button>
+            </div>
+          </div>
+          <div class="err-msg" id="sp-login-err"></div>
         </div>
       </div>
     </section>

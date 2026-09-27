@@ -37,16 +37,23 @@ def get_safe_mode() -> bool:
     return bool(_load().get("safe_mode", True))
 
 
-def set_safe_mode(value: bool) -> bool:
+def _set(key: str, value) -> None:
     with _lock:
         data = _load()
-        data["safe_mode"] = bool(value)
+        if value is None:
+            data.pop(key, None)
+        else:
+            data[key] = value
         try:
             os.makedirs(os.path.dirname(_PATH) or ".", exist_ok=True)
             with open(_PATH, "w", encoding="utf-8") as fh:
                 json.dump(data, fh)
         except OSError:
             pass
+
+
+def set_safe_mode(value: bool) -> bool:
+    _set("safe_mode", bool(value))
     return get_safe_mode()
 
 
@@ -62,22 +69,35 @@ def _spotify_env_set() -> bool:
 def spotify_app_status() -> dict:
     """Для UI. Секрет наружу НЕ отдаём — только факт, что он сохранён."""
     cid, secret = config.spotify_app()
+    logged_in = config.spotify_user_logged_in()
     return {
         "source": "env" if _spotify_env_set() else ("file" if cid else ""),
         "client_id": cid,
         "has_secret": bool(secret),
-        "logged_in": config.spotify_user_logged_in(),
+        "logged_in": logged_in,
+        # имя запоминается при входе из UI; при входе из консоли его нет
+        "user": _load().get("spotify_user", "") if logged_in else "",
     }
+
+
+def set_spotify_user(name: str) -> None:
+    _set("spotify_user", name or None)
 
 
 def _drop_user_token() -> bool:
     """Удалить OAuth-токен входа: refresh-токен привязан к приложению, выдавшему
     его, и после смены/удаления приложения всё равно не обновится."""
+    _set("spotify_user", None)
     try:
         os.remove(config.SPOTIFY_USER_TOKEN_FILE)
         return True
     except OSError:
         return False
+
+
+def logout_spotify() -> dict:
+    _drop_user_token()
+    return spotify_app_status()
 
 
 def set_spotify_app(client_id: str, client_secret: str) -> dict:

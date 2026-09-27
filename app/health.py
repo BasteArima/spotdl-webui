@@ -65,12 +65,9 @@ def environment_status() -> dict:
     if not checks["playlists_writable"]:
         warnings.append("Папка playlists недоступна на запись — m3u не обновится.")
     if not checks["spotify_user_login"] and any(is_saved(p.url) for p in playlists.read_playlists()):
-        if not config.spotify_app()[0]:
-            warnings.append("Liked Songs не синхронизируются: задайте Spotify-приложение во "
-                            "вкладке «Настройки», затем выполните вход.")
-        else:
-            warnings.append("Liked Songs не синхронизируются: нет входа в Spotify. Один раз выполните "
-                            "на сервере: docker exec -it spotdl-webui python -m app.spotify_login")
+        step = ("задайте Spotify-приложение и войдите" if not config.spotify_app()[0]
+                else "войдите в Spotify")
+        warnings.append(f"Liked Songs не синхронизируются: {step} во вкладке «Настройки».")
     if not checks["deno"]:
         warnings.append("Deno не найден — загрузки с YouTube будут падать (AudioProviderError).")
     checks["warnings"] = warnings

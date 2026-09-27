@@ -194,7 +194,7 @@ docker run --rm -p 4535:8000 -e APP_AUTH_TOKEN=dev \
 | `DEEZER_ARL` | — | ARL-токен Deezer для фолбэка. Альтернатива — файл `/conf/deezer_arl.txt`. Без него кнопка Deezer вернёт 400. |
 | `ZOTIFY_CREDENTIALS_FILE` | `/conf/zotify_credentials.json` | Путь к credentials.json Zotify (создаётся при первом логине). |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | — | Своё Spotify-приложение для входа под аккаунтом (нужно для Liked Songs). Обычно задаётся во вкладке «Настройки» (`/conf/spotify_app.json`); env, если задан, важнее. См. «Liked Songs». |
-| `SPOTIFY_USER_TOKEN_FILE` | `/conf/.spotify-user-token.json` | OAuth-токен пользователя для Liked Songs (создаётся `app.spotify_login`). |
+| `SPOTIFY_USER_TOKEN_FILE` | `/conf/.spotify-user-token.json` | OAuth-токен пользователя для Liked Songs (создаётся входом во вкладке «Настройки»). |
 | `ZOTIFY_USERNAME` / `ZOTIFY_PASSWORD` | — | Альтернатива credentials.json — логин/пароль Spotify (хуже, секрет в конфиге). |
 | `ZOTIFY_QUALITY` | `very_high` | `very_high`=320k (нужен Premium), `high`=160k, `normal`=96k, `auto`=макс. для аккаунта. |
 | `ZOTIFY_SAFE_MODE` | `true` | Безопасный режим: одиночные «Spotify 320k» качать в **real-time** (скорость прослушивания, анти-бан). Массовая закачка и апгрейд — всегда real-time; при включённом режиме у массовой ещё пауза между треками. Тумблер в UI. |
@@ -315,24 +315,28 @@ docker exec -it spotdl-webui python -m app.gen_zotify_creds /conf/zotify_credent
   `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET`: если заданы, они важнее UI и поля
   там блокируются. При смене приложения старый вход сбрасывается — войти заново.
 
-**2. Вход (один раз), прямо на сервере:**
+**2. Вход (один раз)** — там же, во вкладке **«Настройки»** → **«Войти в Spotify»**:
 
-```sh
-docker exec -it spotdl-webui python -m app.spotify_login
-```
+1. Появится ссылка на страницу входа Spotify — открыть, войти (можно через
+   Facebook), разрешить доступ.
+2. Браузер откроет `http://127.0.0.1:9900/?code=…` — страница НЕ загрузится, это
+   нормально. Скопировать весь адрес из адресной строки, вставить в поле и нажать
+   **«Завершить вход»**.
 
-Скрипт печатает ссылку → открыть на ПК, войти (можно через Facebook), разрешить
-доступ → браузер откроет `http://127.0.0.1:9900/?code=…` (страница НЕ загрузится —
-это нормально) → скопировать весь адрес и вставить в терминал. Скрипт проверит
-доступ и напишет, сколько треков в Liked Songs. Токен ляжет в
-`/conf/.spotify-user-token.json` и дальше обновляется сам.
+Webui проверит доступ и покажет, под кем вошли и сколько треков в Liked Songs.
+Токен ляжет в `/conf/.spotify-user-token.json` и дальше обновляется сам. Code
+одноразовый и живёт несколько минут: если вход не прошёл — начать заново.
+
+Запасной вариант без UI — в консоли сервера:
+`docker exec -it spotdl-webui python -m app.spotify_login` (та же схема, адрес
+вставляется в терминал).
 
 **3. В UI** добавить плейлист, например `Liked Songs`, со ссылкой **`saved`** и нажать
 Sync. Автосинк подхватывает новые лайки по расписанию, как у обычных плейлистов.
 
 Если входа нет, sync этой записи пропускается с подсказкой в логе задачи, а в UI
 висит баннер. После отзыва доступа в аккаунте Spotify или смены приложения
-вход надо повторить.
+вход надо повторить. Кнопка «Выйти» в «Настройках» удаляет токен.
 
 ## Cookies для YouTube
 
@@ -501,7 +505,7 @@ app/
   spotify_dl.py    одноразовое скачивание одного трека (ручные кнопки)
   spotify_worker.py  долгоживущий воркер: ОДНА авторизация librespot на весь апгрейд
   gen_zotify_creds.py  одноразовая генерация credentials.json через OAuth (FB-вход)
-  spotify_login.py     одноразовый OAuth-вход для Liked Songs (spotdl `saved`)
+  spotify_login.py     OAuth-вход для Liked Songs: ссылка входа, обмен code (подпроцесс из UI), CLI
   settings.py      рантайм-настройки (безопасный режим) в /conf, тумблер в UI
   upgrade.py       Step 2: фоновый массовый апгрейд библиотеки до 320k с метками
   jobs.py          две дорожки очереди, воркеры, лок, запуск spotdl, планировщик

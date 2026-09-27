@@ -396,8 +396,7 @@ def _common_output_args() -> List[str]:
     ]
 
 
-LOGIN_HINT = ("нет входа в Spotify — один раз выполните на сервере: "
-              "docker exec -it spotdl-webui python -m app.spotify_login")
+LOGIN_HINT = "нет входа в Spotify — войдите во вкладке «Настройки» webui"
 
 
 class SpotifyLoginRequired(RuntimeError):

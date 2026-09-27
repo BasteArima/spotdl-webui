@@ -39,10 +39,9 @@ services:
       # (см. README, раздел «Spotify напрямую»). Параметры:
       # - ZOTIFY_QUALITY=very_high     # very_high=320k, high=160k, normal=96k
       #
-      # Liked Songs (плейлист со ссылкой `saved`): своё Spotify-приложение +
-      # один вход `docker exec -it spotdl-webui python -m app.spotify_login`
-      # (README, «Liked Songs»). Client ID/secret проще ввести во вкладке
-      # «Настройки» webui; env, если задан, важнее UI:
+      # Liked Songs (плейлист со ссылкой `saved`): своё Spotify-приложение и
+      # один вход — всё во вкладке «Настройки» webui (README, «Liked Songs»).
+      # Client ID/secret можно задать и здесь; env, если задан, важнее UI:
       # - SPOTIFY_CLIENT_ID=...
       # - SPOTIFY_CLIENT_SECRET=...
       #

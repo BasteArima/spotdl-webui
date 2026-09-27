@@ -199,11 +199,55 @@ function renderSpotifyApp(s) {
   document.getElementById("sp-save").disabled = env;
   document.getElementById("sp-clear").disabled = env || !s.source;
   const src = { env: "переменные окружения (важнее настроек UI)", file: "настройки UI", "": "не задано" }[s.source];
-  document.getElementById("sp-status").innerHTML =
-    `<span class="muted">Источник:</span> ${esc(src)} · <span class="muted">Вход в Spotify:</span> ` +
-    (s.logged_in ? "✅ выполнен" : "— не выполнен");
-  document.getElementById("sp-login-hint").style.display = (s.source && !s.logged_in) ? "" : "none";
+  document.getElementById("sp-status").innerHTML = `<span class="muted">Источник:</span> ${esc(src)}`;
+  // вход имеет смысл только при заданном приложении
+  document.getElementById("sp-login").style.display = s.source ? "" : "none";
+  document.getElementById("sp-login-status").innerHTML = s.logged_in
+    ? "✅ Вход выполнен" + (s.user ? " как <strong>" + esc(s.user) + "</strong>" : "")
+    : '<span class="muted">Вход не выполнен — Liked Songs не синхронизируются.</span>';
+  document.getElementById("sp-login-start").textContent = s.logged_in ? "Войти заново" : "Войти в Spotify";
+  document.getElementById("sp-login-start").className = s.logged_in ? "btn secondary" : "btn";
+  document.getElementById("sp-logout").style.display = s.logged_in ? "" : "none";
 }
+function hideLoginSteps() {
+  document.getElementById("sp-login-steps").style.display = "none";
+  document.getElementById("sp-login-redirect").value = "";
+}
+document.getElementById("sp-login-start").addEventListener("click", async () => {
+  const errEl = document.getElementById("sp-login-err");
+  errEl.textContent = "";
+  try {
+    const r = await api("POST", "/api/spotify-login/start");
+    // ссылкой, а не window.open: после await всплывающее окно режут блокировщики
+    document.getElementById("sp-login-link").href = r.url;
+    document.getElementById("sp-login-steps").style.display = "";
+    document.getElementById("sp-login-link").focus();
+  } catch (e) { errEl.textContent = e.message; }
+});
+async function finishSpotifyLogin() {
+  const errEl = document.getElementById("sp-login-err");
+  const input = document.getElementById("sp-login-redirect");
+  const btn = document.getElementById("sp-login-finish");
+  errEl.textContent = "";
+  if (!input.value.trim()) { errEl.textContent = "Вставьте адрес страницы 127.0.0.1:9900/?code=…"; return; }
+  btn.disabled = true; btn.textContent = "Проверяю…";
+  try {
+    const s = await api("POST", "/api/spotify-login/finish", { redirect_url: input.value });
+    hideLoginSteps();
+    renderSpotifyApp(s);
+    toast("Вход выполнен" + (s.user ? ": " + s.user : "") +
+          (s.total != null ? ` · в Liked Songs ${s.total} треков` : ""));
+    loadStatus();
+  } catch (e) { errEl.textContent = e.message; }
+  finally { btn.disabled = false; btn.textContent = "Завершить вход"; }
+}
+document.getElementById("sp-login-finish").addEventListener("click", finishSpotifyLogin);
+document.getElementById("sp-login-redirect").addEventListener("keydown", e => { if (e.key === "Enter") finishSpotifyLogin(); });
+document.getElementById("sp-logout").addEventListener("click", async () => {
+  if (!confirm("Выйти из Spotify? Liked Songs перестанут синхронизироваться до нового входа.")) return;
+  try { hideLoginSteps(); renderSpotifyApp(await api("DELETE", "/api/spotify-login")); toast("Вы вышли из Spotify"); loadStatus(); }
+  catch (e) { document.getElementById("sp-login-err").textContent = e.message; }
+});
 async function loadSpotifyApp() {
   document.getElementById("sp-err").textContent = "";
   try { renderSpotifyApp(await api("GET", "/api/spotify-app")); }

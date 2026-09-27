@@ -5,9 +5,11 @@ import hmac
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from typing import Optional
 
@@ -16,9 +18,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, errors_parser, health, jobs, playlists, settings, upgrade
+from . import config, errors_parser, health, jobs, playlists, settings, spotify_login, upgrade
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+# корень проекта для `python -m app.…` (в контейнере это /app)
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 app = FastAPI(title="spotdl web-ui", docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -346,6 +350,65 @@ def api_clear_spotify_app():
         return settings.clear_spotify_app()
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# ---- вход в Spotify (Liked Songs) ----
+# state OAuth-входа: защищает от вставки чужого/старого redirect-адреса.
+# Один на процесс — вход делает один человек, новая попытка вытесняет старую.
+_LOGIN = {"state": "", "ts": 0.0}
+_LOGIN_TTL = 15 * 60
+
+
+class SpotifyLoginIn(BaseModel):
+    redirect_url: str
+
+
+@app.post("/api/spotify-login/start", dependencies=[Depends(require_auth)])
+def api_spotify_login_start():
+    cid = config.spotify_app()[0]
+    if not cid:
+        raise HTTPException(status_code=400, detail="Сначала сохраните Client ID и secret своего приложения")
+    _LOGIN.update(state=secrets.token_urlsafe(16), ts=time.time())
+    return {"url": spotify_login.authorize_url(cid, _LOGIN["state"]),
+            "redirect_uri": spotify_login.REDIRECT_URI}
+
+
+@app.post("/api/spotify-login/finish", dependencies=[Depends(require_auth)])
+def api_spotify_login_finish(body: SpotifyLoginIn):
+    code, state, error = spotify_login.parse_redirect(body.redirect_url)
+    if error:
+        raise HTTPException(status_code=400, detail=f"Spotify отклонил вход: {error}")
+    if not code:
+        raise HTTPException(status_code=400, detail="В адресе нет code= — скопируйте адрес целиком")
+    if not _LOGIN["state"] or time.time() - _LOGIN["ts"] > _LOGIN_TTL:
+        raise HTTPException(status_code=400, detail="Попытка входа устарела — нажмите «Войти в Spotify» ещё раз")
+    # голый code (без state) принимаем: его вставляет сам пользователь
+    if state and not hmac.compare_digest(state, _LOGIN["state"]):
+        raise HTTPException(status_code=400, detail="Адрес от другой попытки входа — нажмите «Войти в Spotify» ещё раз")
+    # обмен — в подпроцессе (spotipy не держим в веб-процессе); code через stdin
+    try:
+        r = subprocess.run([sys.executable, "-m", "app.spotify_login", "--exchange"],
+                           cwd=PROJECT_DIR, input=code + "\n", capture_output=True,
+                           text=True, timeout=60)
+        lines = [ln for ln in (r.stdout or "").splitlines() if ln.strip()]
+        res = json.loads(lines[-1]) if lines else {}
+    except subprocess.TimeoutExpired:
+        res = {"ok": False, "error": "Spotify не ответил за 60 с"}
+    except ValueError:
+        res = {"ok": False, "error": "неожиданный ответ: " + ((r.stderr or "").strip()[-300:] or "пусто")}
+    _LOGIN.update(state="", ts=0.0)   # code одноразовый — попытка израсходована
+    if not res.get("ok"):
+        detail = res.get("error") or "вход не удался"
+        if res.get("hint"):
+            detail += ". " + res["hint"]
+        raise HTTPException(status_code=400, detail=detail)
+    settings.set_spotify_user(res.get("user", ""))
+    return dict(settings.spotify_app_status(), total=res.get("total"))
+
+
+@app.delete("/api/spotify-login", dependencies=[Depends(require_auth)])
+def api_spotify_logout():
+    return settings.logout_spotify()
 
 
 # ---- массовый апгрейд качества (Step 2) ----
