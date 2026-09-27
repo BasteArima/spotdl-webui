@@ -36,6 +36,7 @@ def _startup() -> None:
     elif auth.setup_required():
         print("[auth] пароль не задан — сервис попросит придумать его при первом входе. "
               "Если порт смотрит в интернет, задайте APP_PASSWORD в env.", flush=True)
+    jobs.clear_stale_locks()   # остались от рестарта посреди синка — сейчас синков нет
     jobs.start_worker()
     jobs.start_scheduler()  # фоновый автосинк по расписанию (если включён)
 

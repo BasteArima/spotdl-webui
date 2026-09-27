@@ -184,38 +184,76 @@ def _lock_file(playlist_id: str) -> str:
     return os.path.join(config.LOCKS_DIR, f"{playlist_id}.lock")
 
 
+_LOCK_HEARTBEAT = 60     # владелец обновляет mtime лока раз в минуту
+_LOCK_STALE = 300        # без обновления дольше 5 мин — владельца убили
+_LOCK_WAIT = 600         # сколько ждать чужой лок
+
+
+def clear_stale_locks() -> None:
+    """Вызывается при старте сервиса: в этот момент ни один синк идти не может,
+    значит, все локи в папке остались от убитого процесса (рестарт контейнера
+    посреди синка). Локи ставит только этот сервис."""
+    try:
+        names = os.listdir(config.LOCKS_DIR)
+    except OSError:
+        return
+    for name in names:
+        if name.endswith(".lock"):
+            try:
+                os.remove(os.path.join(config.LOCKS_DIR, name))
+            except OSError:
+                pass
+
+
 class PlaylistLock:
-    """Простой файловый лок. Захватывается на время sync конкретного плейлиста."""
+    """Файловый лок на время sync конкретного плейлиста.
+
+    «Живой»: пока синк идёт, владелец раз в минуту обновляет mtime. Протухшим
+    считается только лок без обновления дольше _LOCK_STALE (владельца убили),
+    а не долгий честный синк — раньше порог был «30 мин от создания», и синк
+    большого плейлиста (часы) через полчаса мог получить параллельного двойника."""
 
     def __init__(self, playlist_id: str, job: Job):
         self.path = _lock_file(playlist_id)
         self.job = job
         self.fd = None
+        self._stop = threading.Event()
+
+    def _heartbeat(self) -> None:
+        while not self._stop.wait(_LOCK_HEARTBEAT):
+            try:
+                os.utime(self.path, None)
+            except OSError:
+                pass
 
     def __enter__(self):
         os.makedirs(config.LOCKS_DIR, exist_ok=True)
-        # ждём освобождения до 10 минут
-        deadline = time.time() + 600
+        deadline = time.time() + _LOCK_WAIT
+        last_note = 0.0
         while True:
             try:
                 self.fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o664)
                 os.write(self.fd, str(os.getpid()).encode())
+                threading.Thread(target=self._heartbeat, name=f"lock-{self.job.id}",
+                                 daemon=True).start()
                 return self
             except FileExistsError:
-                # лок занят — проверим, не протух ли (старше 30 мин)
                 try:
-                    age = time.time() - os.path.getmtime(self.path)
-                    if age > 1800:
+                    if time.time() - os.path.getmtime(self.path) > _LOCK_STALE:
                         os.remove(self.path)
+                        self.job.append("[lock] снят брошенный лок (владелец не обновлял его > 5 мин)")
                         continue
                 except OSError:
                     pass
                 if time.time() > deadline:
-                    raise TimeoutError(f"Лок {self.path} занят дольше 10 минут")
-                self.job.append("[lock] плейлист занят, ждём освобождения...")
+                    raise TimeoutError(f"плейлист занят дольше {_LOCK_WAIT // 60} минут")
+                if time.time() - last_note >= 60:      # не спамим лог каждые 3 с
+                    self.job.append("[lock] плейлист занят, ждём освобождения...")
+                    last_note = time.time()
                 time.sleep(3)
 
     def __exit__(self, *exc):
+        self._stop.set()
         if self.fd is not None:
             try:
                 os.close(self.fd)
@@ -497,8 +535,36 @@ def _reset_errors_file(safe: str) -> None:
         pass
 
 
+# Какие плейлисты синкаются прямо сейчас (в этом процессе, обе дорожки). Второй
+# sync того же плейлиста не ждёт лок часами, а сразу пропускается с причиной —
+# типичный случай: ручной Sync, пока автосинк уже качает этот плейлист.
+_active_syncs: Dict[str, str] = {}       # playlist_id -> job.id
+_active_syncs_lock = threading.Lock()
+
+
+class AlreadySyncing(RuntimeError):
+    """Этот плейлист уже синкает другая задача."""
+
+
 def _sync_locked(job: Job, pl: playlists.Playlist) -> None:
     """Sync плейлиста под локом со сбросом errors-файла (защита от дублей)."""
+    with _active_syncs_lock:
+        other = _active_syncs.get(pl.id)
+        if other and other != job.id:
+            other_job = get_job(other)
+            where = f"«{other_job.title}»" if other_job else other
+            raise AlreadySyncing(f"{pl.name}: уже синхронизируется в задаче {where} — "
+                                 f"этот запуск не нужен, смотрите её лог")
+        _active_syncs[pl.id] = job.id
+    try:
+        _sync_locked_inner(job, pl)
+    finally:
+        with _active_syncs_lock:
+            if _active_syncs.get(pl.id) == job.id:
+                del _active_syncs[pl.id]
+
+
+def _sync_locked_inner(job: Job, pl: playlists.Playlist) -> None:
     query = None
     if is_saved(pl.url):
         # список — ДО сброса errors-файла: не получили список — старые
@@ -518,7 +584,10 @@ def _sync_locked(job: Job, pl: playlists.Playlist) -> None:
 
 
 def _run_sync_playlist(job: Job, pl: playlists.Playlist) -> None:
-    _sync_locked(job, pl)
+    try:
+        _sync_locked(job, pl)
+    except AlreadySyncing as e:
+        job.append(f"[skip] {e}")      # не ошибка: синк и так идёт
 
 
 def _run_sync_all(job: Job) -> None:
@@ -535,7 +604,7 @@ def _run_sync_all(job: Job) -> None:
             _sync_locked(job, pl)
         except TimeoutError as e:
             job.append(f"[skip] {pl.name}: {e}")
-        except LikedSongsUnavailable as e:
+        except (LikedSongsUnavailable, AlreadySyncing) as e:
             job.append(f"[skip] {e}")
 
 
