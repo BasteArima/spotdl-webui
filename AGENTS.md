@@ -86,7 +86,14 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
 
 ## 5. Секреты (НИКОГДА не коммитить, не вшивать в образ)
 
-- `APP_AUTH_TOKEN` — пароль входа в UI (env).
+- Вход в UI ([app/auth.py](app/auth.py)): `AUTH_ENABLED=false` — без пароля (только
+  локалка); пароль из env `APP_PASSWORD` (старое имя `APP_AUTH_TOKEN`) важнее UI;
+  иначе first-run setup в UI, хэш PBKDF2 в `/conf/.webui-auth.json` (там же секрет
+  подписи). Браузер хранит НЕ пароль, а токен `v1.<exp>.<hmac>` (30 дней); в ключ
+  подписи подмешан отпечаток пароля → смена пароля разлогинивает всех. Сырой
+  env-пароль в `Authorization` тоже принимается (совместимость со старыми
+  клиентами). Анти-перебор: 5 ошибок/IP → 10 мин. `/api/auth/status` — без авторизации.
+- `/conf/cookies.txt`, `/conf/deezer_arl.txt` — пишутся из вкладки «Настройки» (mode 600).
 - `/conf/cookies.txt` — YouTube cookies (Netscape).
 - `/conf/deezer_arl.txt` или `DEEZER_ARL` — Deezer ARL.
 - `/conf/spotify_app.json` (пишется из вкладки «Настройки», `settings.set_spotify_app`,
@@ -100,7 +107,21 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
   из redirect-URL `http://127.0.0.1:5588/login?code=…` (страница не загрузится — норма)
   → вставить в терминал). client_id keymaster `65b708073fc0480ea92a077233ca87bd`.
 
-## 6. Очередь задач и апгрейд
+## 6. Настройки ([app/settings.py](app/settings.py))
+
+- Реестр `FIELDS`: ключ, env-имя, тип, диапазон, подпись, группа. UI-карточки
+  строятся из `/api/settings/schema` → новая настройка = одна запись в `FIELDS`.
+- Приоритет обычных настроек: **UI → env → встроенный дефолт** (env = дефолт).
+  Переопределения — `/conf/.webui-settings.json`; значение, равное дефолту, не
+  хранится. Секреты (пароль, Spotify-приложение, Deezer ARL) — наоборот, **env
+  важнее UI**.
+- Код читает значения через `settings.get("ключ")` В МОМЕНТ ИСПОЛЬЗОВАНИЯ (не
+  копирует в константы), поэтому изменения действуют без рестарта; планировщик
+  автосинка сверяется с настройками раз в минуту. Подпроцессы (librespot_dl и
+  т.п.) читают тот же json сами.
+- Только-env (пути, шаблон, PUID/PGID) — в UI read-only (`settings.system_info`).
+
+## 7. Очередь задач и апгрейд
 
 - [app/jobs.py](app/jobs.py): две дорожки воркеров — **interactive** (ручные действия)
   и **background** (тяжёлый автосинк/«Синхронизировать всё»). Файловый лок на плейлист
@@ -117,7 +138,7 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
   reader/stderr-потоки, таймаут `UPGRADE_TRACK_TIMEOUT`(1200с), авто-рестарт.
   UI: вкладка «Апгрейд 320k» (старт/стоп, прогресс, ETA).
 
-## 7. Выстраданные грабли (не сломай!)
+## 8. Выстраданные грабли (не сломай!)
 
 - **НЕ** использовать образ `spotdl/spotify-downloader:latest` (падает на `libresolv.so.2`).
   База — `python:3.12-slim-bookworm`.
@@ -133,7 +154,7 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
 - spotdl sync пишет в m3u ВЕСЬ список плейлиста (не только скачанное) → добитый трек
   попадает в m3u при следующем sync.
 
-## 8. Как тестировать локально (Windows)
+## 9. Как тестировать локально (Windows)
 
 - Можно: парсинг (`python tests/test_naming.py`, 10 тестов), логику jobs/upgrade/parser
   со стабами, IPC воркера со стаб-скриптом, Deezer-поиск/скачивание вживую (ARL есть в
@@ -147,7 +168,7 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
   `node --check app/static/app.js`, `python tests/test_naming.py`,
   `python -c "import yaml;yaml.safe_load(open('docker-compose.yml'))"`.
 
-## 9. Конвенции
+## 10. Конвенции
 
 - UI-текст и комментарии — **на русском**.
 - Коммит/пуш — **только по явной просьбе пользователя**. Он на `main` (это деплой-ветка,
@@ -157,10 +178,11 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
 - PowerShell vs Bash: для многострочного `git commit -m` в Bash используй `-F -` с
   here-doc (НЕ PowerShell `@'...'@` — он влезет `@` в сообщение).
 
-## 10. Структура
+## 11. Структура
 
 ```
-app/main.py          FastAPI, маршруты, auth (токен в заголовке)
+app/main.py          FastAPI, маршруты, проверка доступа (токен сессии в заголовке)
+app/auth.py          режимы входа, хэш пароля, токены сессий, анти-перебор
 app/config.py        пути/шаблоны/флаги из env
 app/jobs.py          очередь (2 дорожки), воркеры, лок, запуск spotdl, throttle, планировщик
 app/naming.py        safe-имя/md5-id/тип URL (покрыто тестами!)
@@ -177,7 +199,7 @@ app/place_localfile.py заливка локального файла CLI
 app/resolve_names.py резолв реальных имён со Spotify CLI
 app/gen_zotify_creds.py OAuth-генерация credentials.json (FB-вход)
 app/spotify_login.py OAuth-вход для Liked Songs: authorize-URL, обмен code (--exchange), CLI
-app/settings.py      рантайм-настройки (безопасный режим)
+app/settings.py      реестр настроек UI (UI→env→дефолт), секреты-файлы, cookies
 app/upgrade.py       Step 2: массовый апгрейд (контроллер + воркер)
 app/static/          index.html, app.js, style.css (тёмная SPA)
 Dockerfile           самодостаточный образ (ffmpeg+spotdl+deno+git+app)
@@ -186,7 +208,7 @@ docker-compose.yml   стек для Portainer (image из GHCR), env с ком�
 README.md            полная документация (рус): деплой, env, источники, troubleshooting
 ```
 
-## 11. Состояние / возможные следующие задачи
+## 12. Состояние / возможные следующие задачи
 
 - Сделано: все источники, анти-бан (real-time+пауза), Step 2 с долгоживущим воркером,
   резолв битых имён, фиксы из code-review.

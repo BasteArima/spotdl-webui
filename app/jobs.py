@@ -22,7 +22,7 @@ import threading
 import time
 from typing import Callable, Dict, List, Optional
 
-from . import config, errors_parser, playlists
+from . import config, errors_parser, playlists, settings
 from .naming import is_saved
 
 # ------------------------------------------------------------------ состояние
@@ -392,7 +392,7 @@ def _common_output_args() -> List[str]:
         "--format", config.AUDIO_FORMAT,
         "--simple-tui",
         "--log-level", "INFO",
-        "--threads", str(config.SPOTDL_THREADS),
+        "--threads", str(settings.get("spotdl_threads")),
     ]
 
 
@@ -491,7 +491,7 @@ def _download_track(job: Job, spotify_url: str, youtube_url: str, safe: str) -> 
     При успехе убирает трек из errors-файла и ЛЕГКО дописывает его в m3u (без
     полного spotdl sync всего плейлиста). Возвращает True при успехе."""
     rc, out = run_spotdl(job, download_match_args(youtube_url, spotify_url),
-                         timeout=config.DOWNLOAD_TRACK_TIMEOUT)
+                         timeout=settings.get("download_track_timeout"))
     if rc != 0 or looks_failed(out):
         job.status = "error"
         job.append("[error] загрузка не удалась — трек оставлен в списке ненайденных")
@@ -514,7 +514,7 @@ def _run_download_one(job: Job, spotify_url: str, youtube_url: str, safe: str) -
 def deezer_dl_args(spotify_url: str, safe: str = "") -> List[str]:
     return [
         sys.executable, "-m", "app.deezer_dl",
-        spotify_url, config.OUTPUT_TEMPLATE, config.AUDIO_FORMAT, config.UPLOAD_BITRATE, safe,
+        spotify_url, config.OUTPUT_TEMPLATE, config.AUDIO_FORMAT, settings.get("upload_bitrate"), safe,
     ]
 
 
@@ -523,7 +523,7 @@ def _run_deezer(job: Job, spotify_url: str, safe: str) -> None:
     библиотеку. Для треков, которых нет на YouTube."""
     job.append("=== попытка скачать с Deezer (по ISRC) ===")
     rc, out = _run_process(job, deezer_dl_args(spotify_url, safe), cwd="/app",
-                           timeout=config.DOWNLOAD_TRACK_TIMEOUT)
+                           timeout=settings.get("download_track_timeout"))
     ok = rc == 0 and any(line.startswith("OK ") for line in out)
     if not ok:
         job.status = "error"
@@ -541,7 +541,7 @@ def spotify_dl_args(spotify_url: str, safe: str = "", realtime: bool = False,
     # кнопки он 0 → она всегда качает заново.
     return [
         sys.executable, "-m", "app.spotify_dl",
-        spotify_url, config.OUTPUT_TEMPLATE, config.AUDIO_FORMAT, config.UPLOAD_BITRATE,
+        spotify_url, config.OUTPUT_TEMPLATE, config.AUDIO_FORMAT, settings.get("upload_bitrate"),
         safe, "1" if realtime else "0", str(int(min_bitrate)),
     ]
 
@@ -549,10 +549,10 @@ def spotify_dl_args(spotify_url: str, safe: str = "", realtime: bool = False,
 def bulk_pause(is_cancelled=None, log=None) -> None:
     """Idle-пауза между треками (поверх real-time, анти-бан). Случайная в диапазоне
     ZOTIFY_BULK_WAIT_MIN..MAX. Прерывается отменой."""
-    hi = config.ZOTIFY_BULK_WAIT_MAX
+    hi = settings.get("bulk_wait_max")
     if hi <= 0:
         return
-    secs = random.uniform(min(config.ZOTIFY_BULK_WAIT_MIN, hi), hi)
+    secs = random.uniform(min(settings.get("bulk_wait_min"), hi), hi)
     if log:
         log(f"[safe] пауза {int(secs)}с перед следующим треком")
     end = time.time() + secs
@@ -567,11 +567,10 @@ def _run_zotify(job: Job, spotify_url: str, safe: str, force_realtime: bool = Fa
     положить в библиотеку. Real-time (скорость прослушивания, анти-бан): для
     массовой/апгрейд-загрузки всегда, для одиночной — при включённом без. режиме.
     Для массовой (force_realtime) при безопасном режиме — ещё пауза между треками."""
-    from . import settings
     realtime = force_realtime or settings.get_safe_mode()
     job.append(f"=== Spotify (librespot): скачивание{' [real-time]' if realtime else ''} ===")
     rc, out = _run_process(job, spotify_dl_args(spotify_url, safe, realtime), cwd="/app",
-                           timeout=config.DOWNLOAD_TRACK_TIMEOUT)
+                           timeout=settings.get("download_track_timeout"))
     ok = rc == 0 and any(line.startswith("OK ") for line in out)
     if not ok:
         job.status = "error"
@@ -591,7 +590,7 @@ def place_localfile_args(temp_path: str, spotify_url: str, safe: str = "") -> Li
     return [
         sys.executable, "-m", "app.place_localfile",
         temp_path, spotify_url, config.OUTPUT_TEMPLATE,
-        config.AUDIO_FORMAT, config.UPLOAD_BITRATE, safe,
+        config.AUDIO_FORMAT, settings.get("upload_bitrate"), safe,
     ]
 
 
@@ -601,7 +600,7 @@ def _run_upload(job: Job, temp_path: str, spotify_url: str, safe: str, orig_name
     То же, что spotdl делает после скачивания аудио — только источник локальный."""
     job.append(f"=== заливка локального файла: {orig_name} ===")
     rc, out = _run_process(job, place_localfile_args(temp_path, spotify_url, safe), cwd="/app",
-                           timeout=config.DOWNLOAD_TRACK_TIMEOUT)
+                           timeout=settings.get("download_track_timeout"))
     try:
         os.remove(temp_path)
     except OSError:
@@ -921,29 +920,53 @@ def start_worker() -> None:
 
 
 # ------------------------------------------------------------------ планировщик
+_SCHED_TICK = 60.0            # как часто планировщик сверяется с настройками
+_last_autosync = time.time()  # отсчёт интервала — от старта или последнего автосинка
+
+
+def _autosync_now() -> None:
+    global _last_autosync
+    _last_autosync = time.time()
+    if not _has_pending_sync_all():
+        enqueue_sync_all(auto=True)
+
+
+def next_autosync() -> Optional[float]:
+    """Когда будет следующий автосинк (unix-время) или None, если выключен."""
+    hours = settings.get("autosync_interval_hours")
+    return _last_autosync + hours * 3600 if hours > 0 else None
+
+
 def _scheduler() -> None:
-    """Фоновый автосинк — замена отдельного контейнера-автосинка.
-    Раз в AUTOSYNC_INTERVAL_HOURS ставит в очередь sync-всех. Все загрузки
-    проходят через тот же воркер и те же локи, что и ручные операции."""
-    interval = config.AUTOSYNC_INTERVAL_HOURS * 3600.0
-    if config.AUTOSYNC_ON_START:
+    """Фоновый автосинк — замена отдельного контейнера-автосинка. Все загрузки
+    проходят через тот же воркер и те же локи, что и ручные операции.
+
+    Интервал берётся из настроек на КАЖДОМ шаге, поэтому смена во вкладке
+    «Настройки» действует сразу, без рестарта. Шаг — минута: в простое это
+    ничего не стоит."""
+    global _last_autosync
+    # «при старте» — только если автосинк вообще включён (интервал 0 = выключен совсем)
+    if settings.get("autosync_on_start") and settings.get("autosync_interval_hours") > 0:
         time.sleep(max(0.0, config.AUTOSYNC_START_DELAY))
-        if not _has_pending_sync_all():
-            enqueue_sync_all(auto=True)
+        _autosync_now()
     while True:
-        time.sleep(interval)
-        if not _has_pending_sync_all():
-            enqueue_sync_all(auto=True)
+        time.sleep(_SCHED_TICK)
+        hours = settings.get("autosync_interval_hours")
+        if hours <= 0:
+            # выключен: отсчёт «замораживаем», чтобы при включении интервал
+            # начался заново, а не сработал мгновенно за всё время простоя
+            _last_autosync = time.time()
+            continue
+        if time.time() - _last_autosync >= hours * 3600:
+            _autosync_now()
 
 
 _scheduler_thread: Optional[threading.Thread] = None
 
 
 def start_scheduler() -> None:
-    """Запускает планировщик, если интервал > 0."""
+    """Запускает планировщик всегда: включение/выключение и интервал — в настройках."""
     global _scheduler_thread
-    if config.AUTOSYNC_INTERVAL_HOURS <= 0:
-        return
     if _scheduler_thread is None or not _scheduler_thread.is_alive():
         _scheduler_thread = threading.Thread(target=_scheduler, name="spotdl-scheduler", daemon=True)
         _scheduler_thread.start()

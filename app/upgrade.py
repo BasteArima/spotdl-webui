@@ -15,11 +15,9 @@ import sys
 import threading
 import time
 
-from . import config
+from . import config, settings
 
 _STATE_FILE = os.path.join(config.CONF_DIR, ".webui-upgraded.json")
-# Запас по времени на ОДИН трек (real-time ~ длительность + конвертация/мета).
-_DL_TIMEOUT = int(os.environ.get("UPGRADE_TRACK_TIMEOUT", "1200"))
 
 
 class _UpgradeController:
@@ -144,7 +142,7 @@ class _UpgradeController:
 
     def _daily_gate(self) -> bool:
         """Соблюсти лимит загрузок в сутки. Возвращает False, если остановлено."""
-        limit = config.UPGRADE_PER_DAY
+        limit = settings.get("upgrade_per_day")
         if limit <= 0:
             return True
         today = time.strftime("%Y-%m-%d", time.gmtime())
@@ -171,8 +169,8 @@ class _UpgradeController:
     def _spawn_worker(self):
         # realtime="1", min_bitrate из config — фиксированы на весь сеанс воркера.
         cmd = [sys.executable, "-m", "app.spotify_worker",
-               config.OUTPUT_TEMPLATE, config.AUDIO_FORMAT, config.UPLOAD_BITRATE,
-               "1", str(config.UPGRADE_MIN_BITRATE)]
+               config.OUTPUT_TEMPLATE, config.AUDIO_FORMAT, settings.get("upload_bitrate"),
+               "1", str(settings.get("upgrade_min_bitrate"))]
         w = subprocess.Popen(cmd, cwd="/app", stdin=subprocess.PIPE,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              text=True, bufsize=1)
@@ -225,7 +223,7 @@ class _UpgradeController:
             self._kill_worker()
             return False
         try:
-            line = q.get(timeout=_DL_TIMEOUT)
+            line = q.get(timeout=settings.get("upgrade_track_timeout"))
         except queue.Empty:
             print(f"[upgrade] TIMEOUT {name} — перезапуск воркера", flush=True)
             self._kill_worker()

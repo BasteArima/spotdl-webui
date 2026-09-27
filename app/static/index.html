@@ -8,12 +8,18 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <!-- Экран входа -->
-  <div id="login-screen">
+  <!-- Экран входа / первичной установки пароля. Скрыт, пока /api/auth/status
+       не скажет, что он нужен (иначе мелькал бы при отключённой авторизации). -->
+  <div id="login-screen" style="display:none">
     <div class="modal" style="width:340px">
-      <h2>Вход</h2>
-      <label>Пароль</label>
+      <h2 id="login-title">Вход</h2>
+      <div class="muted small" id="login-note" style="display:none"></div>
+      <label for="login-token">Пароль</label>
       <input id="login-token" type="password" autocomplete="current-password" placeholder="Пароль">
+      <div id="login-confirm-wrap" style="display:none">
+        <label for="login-confirm">Повторите пароль</label>
+        <input id="login-confirm" type="password" autocomplete="new-password" placeholder="Ещё раз">
+      </div>
       <div class="err-msg" id="login-err"></div>
       <div class="actions">
         <button class="btn" id="login-btn">Войти</button>
@@ -106,6 +112,59 @@
     <!-- ============ Настройки ============ -->
     <section class="view" id="view-settings">
       <div class="card">
+        <strong>Доступ</strong>
+        <div id="acc-status" class="small" style="margin-top:6px"></div>
+        <div id="acc-change" style="display:none">
+          <div class="form-grid">
+            <label for="acc-current">Текущий пароль</label>
+            <input id="acc-current" type="password" autocomplete="current-password">
+            <label for="acc-new">Новый пароль</label>
+            <input id="acc-new" type="password" autocomplete="new-password">
+            <label for="acc-confirm">Ещё раз</label>
+            <input id="acc-confirm" type="password" autocomplete="new-password">
+          </div>
+          <div class="err-msg" id="acc-err"></div>
+          <div class="row" style="margin-top:12px">
+            <button class="btn" id="acc-save">Сменить пароль</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- обычные настройки: карточки строятся из /api/settings/schema -->
+      <div id="settings-groups"></div>
+
+      <div class="card" style="margin-top:16px">
+        <strong>YouTube cookies</strong>
+        <div class="muted small" style="max-width:640px; margin-top:4px">
+          Без cookies YouTube на объёме начинает требовать «подтвердите, что вы не робот».
+          Экспортируйте cookies youtube.com в формате Netscape (расширение вроде
+          «Get cookies.txt LOCALLY») и загрузите файл сюда.
+        </div>
+        <div id="ck-status" class="small" style="margin-top:10px"></div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn secondary" id="ck-upload">Загрузить cookies.txt</button>
+          <input type="file" id="ck-file" accept=".txt,text/plain" style="display:none">
+          <button class="btn danger" id="ck-clear">Удалить</button>
+        </div>
+        <div class="err-msg" id="ck-err"></div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <strong>Deezer (фолбэк для треков, которых нет на YouTube)</strong>
+        <div class="muted small" style="max-width:640px; margin-top:4px">
+          Нужен ARL — значение cookie <code>arl</code> на deezer.com после входа. Это секрет уровня
+          пароля: хранится в <code>/conf/deezer_arl.txt</code> с правами 600, обратно в браузер не отдаётся.
+        </div>
+        <div id="dz-status" class="small" style="margin-top:10px"></div>
+        <div class="row" style="margin-top:10px">
+          <input id="dz-arl" type="password" autocomplete="off" spellcheck="false" placeholder="ARL" style="flex:1; min-width:220px; max-width:420px">
+          <button class="btn" id="dz-save">Сохранить</button>
+          <button class="btn danger" id="dz-clear">Удалить</button>
+        </div>
+        <div class="err-msg" id="dz-err"></div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
         <strong>Spotify-приложение (для Liked Songs)</strong>
         <div class="muted small" style="max-width:640px; margin-top:4px">
           Нужно, чтобы синхронизировать «Любимые треки» (плейлист со ссылкой <code>saved</code>).
@@ -147,6 +206,12 @@
           </div>
           <div class="err-msg" id="sp-login-err"></div>
         </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <strong>Системные (только env / compose)</strong>
+        <div class="muted small" style="margin-top:4px">Меняются в compose и применяются после пересоздания контейнера.</div>
+        <div id="sys-info" class="small" style="margin-top:10px"></div>
       </div>
     </section>
 

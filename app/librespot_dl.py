@@ -35,7 +35,7 @@ def download_one(session, spotify_url: str, template: str, fmt: str, bitrate: st
     """Скачать один трек через ПЕРЕДАННУЮ сессию и положить в библиотеку.
     Возвращает (status, value): status ∈ {'ok','skip','fail'}; value — путь или текст.
     SpotifyClient должен быть уже инициализирован вызывающим (library.init_spotify)."""
-    from app import config, library
+    from app import config, library, settings
     from librespot.audio.decoders import AudioQuality, VorbisOnlyAudioQuality
     from librespot.metadata import TrackId
 
@@ -53,8 +53,12 @@ def download_one(session, spotify_url: str, template: str, fmt: str, bitrate: st
     uri = f"spotify:track:{track_id_from_url(spotify_url)}"
     log(f"[librespot] {uri}: аудио ({'real-time' if realtime else 'полная'} скорость)")
     track_id = TrackId.from_uri(uri)
+    # very_high=320k (Premium), high=160k, normal=96k; если такого файла у трека
+    # нет, librespot берёт ближайший доступный vorbis
+    quality = {"normal": AudioQuality.NORMAL, "high": AudioQuality.HIGH}.get(
+        settings.get("zotify_quality"), AudioQuality.VERY_HIGH)
     stream = session.content_feeder().load(
-        track_id, VorbisOnlyAudioQuality(AudioQuality.VERY_HIGH), False, None)
+        track_id, VorbisOnlyAudioQuality(quality), False, None)
 
     os.makedirs(config.UPLOADS_DIR, exist_ok=True)
     tmpdir = tempfile.mkdtemp(dir=config.UPLOADS_DIR, prefix="lr_")

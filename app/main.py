@@ -11,14 +11,14 @@ import subprocess
 import sys
 import time
 import uuid
-from typing import Optional
+from typing import Any, Dict, Optional
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, errors_parser, health, jobs, playlists, settings, spotify_login, upgrade
+from . import auth, config, errors_parser, health, jobs, playlists, settings, spotify_login, upgrade
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 # корень проекта для `python -m app.…` (в контейнере это /app)
@@ -29,12 +29,12 @@ app = FastAPI(title="spotdl web-ui", docs_url=None, redoc_url=None, openapi_url=
 
 @app.on_event("startup")
 def _startup() -> None:
-    if not config.APP_AUTH_TOKEN:
-        # Жёсткий отказ стартовать без токена — сервис умеет запускать процессы.
-        raise RuntimeError(
-            "APP_AUTH_TOKEN не задан. Установите переменную окружения с непустым "
-            "токеном, иначе сервис стартовать не будет."
-        )
+    if not auth.enabled():
+        print("[auth] ВНИМАНИЕ: авторизация отключена (AUTH_ENABLED=false) — UI открыт "
+              "всем, кто достучится до порта. Только для закрытой локальной сети.", flush=True)
+    elif auth.setup_required():
+        print("[auth] пароль не задан — сервис попросит придумать его при первом входе. "
+              "Если порт смотрит в интернет, задайте APP_PASSWORD в env.", flush=True)
     jobs.start_worker()
     jobs.start_scheduler()  # фоновый автосинк по расписанию (если включён)
 
@@ -51,14 +51,85 @@ def _extract_token(authorization: Optional[str], x_auth_token: Optional[str]) ->
     return ""
 
 
-def require_auth(
+def _request_token(
     authorization: Optional[str] = Header(default=None),
     x_auth_token: Optional[str] = Header(default=None, alias="X-Auth-Token"),
-) -> None:
-    token = _extract_token(authorization, x_auth_token)
-    expected = config.APP_AUTH_TOKEN
-    if not token or not hmac.compare_digest(token, expected):
+) -> str:
+    return _extract_token(authorization, x_auth_token)
+
+
+def require_auth(token: str = Depends(_request_token)) -> None:
+    if not auth.is_authorized(token):
         raise HTTPException(status_code=401, detail="Требуется авторизация")
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "?"
+
+
+class PasswordIn(BaseModel):
+    password: str
+
+
+class PasswordChangeIn(BaseModel):
+    current: str
+    new: str
+
+
+@app.get("/api/auth/status")
+def api_auth_status(token: str = Depends(_request_token)):
+    """Без авторизации: фронту нужно понять, что показывать (вход / первичная
+    установка пароля / сразу приложение)."""
+    return {
+        "enabled": auth.enabled(),
+        "setup_required": auth.setup_required(),
+        "source": auth.source(),
+        "authenticated": auth.is_authorized(token),
+        "min_length": auth.MIN_PASSWORD_LEN,
+    }
+
+
+@app.post("/api/auth/login")
+def api_auth_login(body: PasswordIn, request: Request):
+    if not auth.enabled():
+        return {"token": ""}
+    if auth.setup_required():
+        raise HTTPException(status_code=409, detail="Пароль ещё не задан")
+    ip = _client_ip(request)
+    wait = auth.throttled(ip)
+    if wait:
+        raise HTTPException(status_code=429, detail=f"Слишком много попыток — подождите {-(-wait // 60)} мин")
+    if not auth.check_password(body.password):
+        auth.register_failure(ip)
+        raise HTTPException(status_code=401, detail="Неверный пароль")
+    auth.register_success(ip)
+    return {"token": auth.issue_token()}
+
+
+@app.post("/api/auth/setup")
+def api_auth_setup(body: PasswordIn):
+    try:
+        return {"token": auth.setup(body.password)}
+    except PermissionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/auth/password", dependencies=[Depends(require_auth)])
+def api_auth_change_password(body: PasswordChangeIn, request: Request):
+    ip = _client_ip(request)
+    if auth.throttled(ip):
+        raise HTTPException(status_code=429, detail="Слишком много попыток — подождите")
+    if not auth.check_password(body.current):
+        auth.register_failure(ip)
+        raise HTTPException(status_code=400, detail="Текущий пароль неверен")
+    try:
+        auth.set_password(body.new)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    # старые сессии (и эта) после смены пароля недействительны — выдаём новую
+    return {"token": auth.issue_token()}
 
 
 # ------------------------------------------------------------------ модели тела
@@ -312,18 +383,74 @@ def api_status():
     return health.environment_status()
 
 
-class SettingsIn(BaseModel):
-    safe_mode: bool
-
-
 @app.get("/api/settings", dependencies=[Depends(require_auth)])
 def api_get_settings():
     return settings.all_settings()
 
 
 @app.post("/api/settings", dependencies=[Depends(require_auth)])
-def api_set_settings(body: SettingsIn):
-    return {"safe_mode": settings.set_safe_mode(body.safe_mode)}
+def api_set_settings(body: Dict[str, Any]):
+    """Частичное обновление: {"ключ": значение}; null — сбросить к env/дефолту."""
+    try:
+        return settings.update(body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/settings/schema", dependencies=[Depends(require_auth)])
+def api_settings_schema():
+    return {
+        "fields": settings.schema(),
+        "system": settings.system_info(),
+        "next_autosync": jobs.next_autosync(),
+    }
+
+
+class ArlIn(BaseModel):
+    arl: str
+
+
+@app.get("/api/deezer-arl", dependencies=[Depends(require_auth)])
+def api_get_deezer_arl():
+    return settings.deezer_status()      # сам ARL наружу не отдаём
+
+
+@app.post("/api/deezer-arl", dependencies=[Depends(require_auth)])
+def api_set_deezer_arl(body: ArlIn):
+    try:
+        return settings.set_deezer_arl(body.arl)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/deezer-arl", dependencies=[Depends(require_auth)])
+def api_clear_deezer_arl():
+    try:
+        return settings.clear_deezer_arl()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/cookies", dependencies=[Depends(require_auth)])
+def api_get_cookies():
+    return settings.cookies_status()
+
+
+@app.post("/api/cookies", dependencies=[Depends(require_auth)])
+async def api_set_cookies(file: UploadFile = File(...)):
+    try:
+        raw = await file.read(settings._COOKIES_MAX + 1)
+    finally:
+        await file.close()
+    try:
+        return settings.set_cookies(raw)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/cookies", dependencies=[Depends(require_auth)])
+def api_clear_cookies():
+    return settings.clear_cookies()
 
 
 class SpotifyAppIn(BaseModel):

@@ -242,21 +242,21 @@ input[type="checkbox"] { width: auto; }
 
 /* iOS-переключатель для «Безопасного режима» */
 #safe-mode-label { user-select: none; }
-#safe-mode-toggle {
+#safe-mode-toggle, input.switch {
   appearance: none; -webkit-appearance: none;
   width: 38px; height: 23px; padding: 0; border: none; border-radius: 980px;
   background: var(--fill-strong); position: relative; flex: none;
   cursor: pointer; transition: background .2s ease;
 }
-#safe-mode-toggle::after {
+#safe-mode-toggle::after, input.switch::after {
   content: ""; position: absolute; top: 2px; left: 2px;
   width: 19px; height: 19px; border-radius: 50%;
   background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3);
   transition: transform .2s ease;
 }
-#safe-mode-toggle:checked { background: var(--accent); }
-#safe-mode-toggle:checked::after { transform: translateX(15px); }
-#safe-mode-toggle:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent2) 26%, transparent); }
+#safe-mode-toggle:checked, input.switch:checked { background: var(--accent); }
+#safe-mode-toggle:checked::after, input.switch:checked::after { transform: translateX(15px); }
+#safe-mode-toggle:focus-visible, input.switch:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent2) 26%, transparent); }
 
 /* ---------------------------------------------------------------- карточки */
 .card {
@@ -299,6 +299,32 @@ tr:hover td { background: color-mix(in srgb, var(--fill) 55%, transparent); }
 }
 .form-grid label { color: var(--muted); font-size: 12.5px; font-weight: 500; }
 @media (max-width: 560px) { .form-grid { grid-template-columns: minmax(0, 1fr); } }
+/* строки настроек: подпись | контрол (+ сброс), под контролом — пояснение */
+.set-row {
+  display: grid; grid-template-columns: minmax(170px, 250px) minmax(0, 1fr);
+  gap: 4px 18px; align-items: center; padding: 11px 0;
+  border-top: 1px solid var(--border); margin-top: 10px;
+}
+.set-row + .set-row { margin-top: 0; }
+.set-label { font-weight: 500; }
+.set-control { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.set-control input[type=number] { width: 110px; }
+.set-control select { width: auto; min-width: 130px; }
+.set-help { grid-column: 2; line-height: 1.45; }
+.set-default { opacity: .8; font-size: 11.5px; margin-top: 2px; }
+button.linkbtn {
+  background: none; border: none; padding: 0 2px; cursor: pointer;
+  color: var(--accent2); font-size: 12.5px;
+}
+button.linkbtn:hover { text-decoration: underline; }
+.sys-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 16px; }
+.sys-grid > div { overflow-wrap: anywhere; }
+@media (max-width: 560px) {
+  .set-row { grid-template-columns: minmax(0, 1fr); }
+  .set-help { grid-column: 1; }
+  .sys-grid { grid-template-columns: minmax(0, 1fr); gap: 2px 0; }
+  .sys-grid > div { margin-bottom: 8px; }
+}
 .settings-sub { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
 ol.steps { margin: 0 0 10px; padding-left: 20px; line-height: 1.55; }
 ol.steps li + li { margin-top: 4px; }

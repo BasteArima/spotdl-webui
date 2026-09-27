@@ -136,19 +136,11 @@ function validateSource(url) {
   if (/youtube\.com|youtu\.be|soundcloud\.com|bandcamp\.com|piped/.test(u)) return null;
   return "ожидается YouTube / YT-Music / SoundCloud / Bandcamp";
 }
+// «Выйти» — забыть сессию на ЭТОМ устройстве и заново спросить сервер, что показать
 function logout() {
   TOKEN = "";
   localStorage.removeItem(TOKEN_KEY);
-  document.getElementById("login-screen").style.display = "flex";
-  document.getElementById("appheader").style.display = "none";
-  document.getElementById("appmain").style.display = "none";
-}
-async function tryLogin(token) {
-  TOKEN = token;
-  const res = await fetch("/api/playlists", { headers: authHeaders() });
-  if (res.ok) { localStorage.setItem(TOKEN_KEY, token); showApp(); return true; }
-  TOKEN = "";
-  return false;
+  bootAuth();
 }
 
 // ------------------------------------------------------------------ утилиты
@@ -183,8 +175,206 @@ document.querySelectorAll("nav button").forEach(b => {
     if (view === "playlists") loadPlaylists();
     if (view === "upgrade") loadUpgrade();
     if (view === "jobs") loadJobs();
-    if (view === "settings") loadSpotifyApp();
+    if (view === "settings") { renderAccess(); loadSettingsPage(); loadSpotifyApp(); }
   });
+});
+
+// ------------------------------------------------------------------ настройки: общие (из схемы)
+// Карточки строятся из /api/settings/schema: новая настройка добавляется одной
+// записью в app/settings.py FIELDS, без правок разметки. Значение из env —
+// это дефолт; сохранённое в UI его переопределяет, «сбросить» возвращает дефолт.
+let SETTINGS_SCHEMA = [];
+
+function fmtSetting(f, v) {
+  if (f.kind === "bool") return v ? "вкл" : "выкл";
+  return String(v) + (f.unit ? " " + f.unit : "");
+}
+function fmtWhen(ts) {
+  if (!ts) return "";
+  const sec = ts - Date.now() / 1000;
+  if (sec <= 60) return "вот-вот";
+  if (sec < 3600) return "через " + Math.round(sec / 60) + " мин";
+  return "через " + (sec / 3600).toFixed(1).replace(/\.0$/, "") + " ч";
+}
+
+function settingControl(f) {
+  let input;
+  if (f.kind === "bool") {
+    input = el("input", { type: "checkbox", class: "switch", "data-key": f.key });
+    input.checked = !!f.value;
+  } else if (f.kind === "choice") {
+    input = el("select", { "data-key": f.key }, f.choices.map(c => el("option", { value: c }, [c])));
+    input.value = f.value;
+  } else {
+    input = el("input", { type: "number", "data-key": f.key, step: f.kind === "float" ? "any" : "1" });
+    if (f.lo != null) input.min = f.lo;
+    if (f.hi != null) input.max = f.hi;
+    input.value = f.value;
+  }
+  return input;
+}
+
+function renderSettingsGroups(data) {
+  SETTINGS_SCHEMA = data.fields;
+  const box = document.getElementById("settings-groups");
+  box.innerHTML = "";
+  const groups = [];
+  data.fields.forEach(f => { if (!groups.includes(f.group)) groups.push(f.group); });
+  groups.forEach(g => {
+    const fields = data.fields.filter(f => f.group === g);
+    const card = el("div", { class: "card", style: "margin-top:16px" }, [el("strong", {}, [g])]);
+    if (g === "Автосинк") {
+      const nxt = data.next_autosync ? "Следующий автосинк — " + fmtWhen(data.next_autosync) + "." : "Автосинк выключен.";
+      card.appendChild(el("div", { class: "muted small", style: "margin-top:4px" }, [nxt]));
+    }
+    fields.forEach(f => {
+      const control = settingControl(f);
+      const def = "По умолчанию: " + fmtSetting(f, f.default) + (f.default_source === "env" ? " (из env " + f.env + ")" : "");
+      const reset = el("button", { class: "linkbtn", title: "Вернуть значение по умолчанию" }, ["↺ сбросить"]);
+      reset.style.visibility = f.overridden ? "visible" : "hidden";
+      reset.addEventListener("click", () => saveSettings({ [f.key]: null }, card));
+      card.appendChild(el("div", { class: "set-row" }, [
+        el("label", { class: "set-label" }, [f.label]),
+        el("div", { class: "set-control" }, [control, f.unit && f.kind !== "bool" ? el("span", { class: "muted small" }, [f.unit]) : "", reset]),
+        el("div", { class: "set-help muted small" }, [f.help ? el("div", {}, [f.help]) : "", el("div", { class: "set-default" }, [def])]),
+      ]));
+    });
+    const errEl = el("div", { class: "err-msg" });
+    const save = el("button", { class: "btn" }, ["Сохранить"]);
+    save.addEventListener("click", () => {
+      const vals = {};
+      card.querySelectorAll("[data-key]").forEach(inp => {
+        const f = fields.find(x => x.key === inp.dataset.key);
+        const v = f.kind === "bool" ? inp.checked : inp.value;
+        if (String(v) !== String(f.value)) vals[f.key] = v;
+      });
+      if (!Object.keys(vals).length) { toast("Изменений нет"); return; }
+      saveSettings(vals, card);
+    });
+    card.appendChild(errEl);
+    card.appendChild(el("div", { class: "row", style: "margin-top:12px" }, [save]));
+    box.appendChild(card);
+  });
+}
+
+async function saveSettings(vals, card) {
+  const errEl = card.querySelector(".err-msg");
+  if (errEl) errEl.textContent = "";
+  try {
+    const s = await api("POST", "/api/settings", vals);
+    document.getElementById("safe-mode-toggle").checked = !!s.safe_mode;   // тумблер в шапке
+    toast("Сохранено");
+    await loadSettingsPage(false);
+  } catch (e) { if (errEl) errEl.textContent = e.message; else toast("Ошибка: " + e.message); }
+}
+
+function renderSystemInfo(rows) {
+  const box = document.getElementById("sys-info");
+  box.innerHTML = "";
+  box.appendChild(el("div", { class: "sys-grid" }, rows.flatMap(r => [
+    el("code", {}, [r.env]),
+    el("div", {}, [el("span", {}, [r.value]), r.help ? el("div", { class: "muted" }, [r.help]) : ""]),
+  ])));
+}
+
+// ------------------------------------------------------------------ настройки: YouTube cookies
+function renderCookies(s) {
+  const st = document.getElementById("ck-status");
+  if (!s.present) {
+    st.innerHTML = '<span class="muted">Файла нет</span> — YouTube может требовать вход «не робот».';
+  } else {
+    const when = s.modified ? new Date(s.modified * 1000).toLocaleString("ru-RU") : "?";
+    st.innerHTML = `✅ Загружен ${esc(when)}` + (s.cookies != null ? ` · cookies: ${s.cookies}, из них youtube.com: ${s.youtube}` : "");
+  }
+  document.getElementById("ck-clear").style.display = s.present ? "" : "none";
+}
+document.getElementById("ck-upload").addEventListener("click", () => document.getElementById("ck-file").click());
+document.getElementById("ck-file").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  const err = document.getElementById("ck-err");
+  err.textContent = "";
+  const fd = new FormData();
+  fd.append("file", file);
+  try {
+    const res = await fetch("/api/cookies", { method: "POST", headers: authHeaders(), body: fd });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401) { logout(); return; }
+    if (!res.ok) { err.textContent = data.detail || ("HTTP " + res.status); return; }
+    renderCookies(data); toast("cookies.txt сохранён"); loadStatus();
+  } catch (e2) { err.textContent = e2.message; }
+});
+document.getElementById("ck-clear").addEventListener("click", async () => {
+  if (!confirm("Удалить cookies.txt?")) return;
+  try { renderCookies(await api("DELETE", "/api/cookies")); toast("Удалено"); loadStatus(); }
+  catch (e) { document.getElementById("ck-err").textContent = e.message; }
+});
+
+// ------------------------------------------------------------------ настройки: Deezer ARL
+function renderDeezer(s) {
+  const env = s.source === "env";
+  document.getElementById("dz-status").innerHTML = s.configured
+    ? "✅ ARL задан" + (env ? ' в env <code>DEEZER_ARL</code> — <span class="muted">он важнее UI, менять только там</span>' : "")
+    : '<span class="muted">Не задан — кнопка «Deezer» у треков работать не будет.</span>';
+  const inp = document.getElementById("dz-arl");
+  inp.value = "";
+  inp.placeholder = s.configured && !env ? "сохранён — вставьте новый, чтобы заменить" : "ARL";
+  inp.disabled = env;
+  document.getElementById("dz-save").disabled = env;
+  document.getElementById("dz-clear").style.display = s.configured && !env ? "" : "none";
+}
+document.getElementById("dz-save").addEventListener("click", async () => {
+  const err = document.getElementById("dz-err");
+  err.textContent = "";
+  try { renderDeezer(await api("POST", "/api/deezer-arl", { arl: document.getElementById("dz-arl").value })); toast("ARL сохранён"); }
+  catch (e) { err.textContent = e.message; }
+});
+document.getElementById("dz-clear").addEventListener("click", async () => {
+  if (!confirm("Удалить Deezer ARL?")) return;
+  try { renderDeezer(await api("DELETE", "/api/deezer-arl")); toast("Удалено"); }
+  catch (e) { document.getElementById("dz-err").textContent = e.message; }
+});
+
+// вся вкладка «Настройки» разом
+async function loadSettingsPage(withSecrets = true) {
+  try {
+    const data = await api("GET", "/api/settings/schema");
+    renderSettingsGroups(data);
+    renderSystemInfo(data.system);
+  } catch (e) { toast("Ошибка: " + e.message); }
+  if (!withSecrets) return;
+  api("GET", "/api/cookies").then(renderCookies).catch(() => {});
+  api("GET", "/api/deezer-arl").then(renderDeezer).catch(() => {});
+}
+
+// ------------------------------------------------------------------ настройки: доступ
+function renderAccess() {
+  const st = document.getElementById("acc-status");
+  const canChange = AUTH.enabled && AUTH.source === "ui";
+  if (!AUTH.enabled) {
+    st.innerHTML = "🔓 Вход отключён (<code>AUTH_ENABLED=false</code>): UI открыт всем, кто достучится " +
+      "до порта. Годится только для закрытой локальной сети.";
+  } else if (AUTH.source === "env") {
+    st.innerHTML = '🔒 Пароль задан в env (<code>APP_PASSWORD</code>/<code>APP_AUTH_TOKEN</code>) — ' +
+      '<span class="muted">сменить можно только там.</span>';
+  } else {
+    st.innerHTML = '🔒 Пароль задан в UI. <span class="muted">Смена пароля разлогинит остальные устройства.</span>';
+  }
+  document.getElementById("acc-change").style.display = canChange ? "" : "none";
+}
+document.getElementById("acc-save").addEventListener("click", async () => {
+  const cur = document.getElementById("acc-current"), nw = document.getElementById("acc-new"),
+        cf = document.getElementById("acc-confirm"), err = document.getElementById("acc-err");
+  err.textContent = "";
+  if (nw.value.length < AUTH.min_length) { err.textContent = `Минимум ${AUTH.min_length} символов`; return; }
+  if (nw.value !== cf.value) { err.textContent = "Пароли не совпадают"; return; }
+  try {
+    const r = await api("POST", "/api/auth/password", { current: cur.value, new: nw.value });
+    TOKEN = r.token; localStorage.setItem(TOKEN_KEY, TOKEN);   // старая сессия после смены недействительна
+    cur.value = nw.value = cf.value = "";
+    toast("Пароль изменён");
+  } catch (e) { err.textContent = e.message; }
 });
 
 // ------------------------------------------------------------------ настройки: Spotify-приложение
@@ -847,6 +1037,8 @@ async function removeGroup(title) {
 async function pollTasks() {
   clearTimeout(TASK_POLL_TIMER);
   TASK_POLL_TIMER = null;
+  // на экране входа не опрашиваем: каждый 401 снова дёргал бы экран входа
+  if (document.getElementById("appmain").style.display === "none") return;
   // Вкладка не видна — не опрашиваем совсем. Сервис почти всё время простаивает,
   // а забытая открытая вкладка иначе будила бы бэкенд круглосуточно.
   if (document.hidden) { TASK_POLL_PAUSED = true; return; }
@@ -1074,21 +1266,84 @@ async function copyJobLog(jobId) {
 }
 
 // ------------------------------------------------------------------ вход
-document.getElementById("login-btn").addEventListener("click", async () => {
-  const token = document.getElementById("login-token").value.trim();
+// Режимы сервера: вход отключён (AUTH_ENABLED=false) / пароль ещё не задан
+// (первичная установка) / обычный вход. В браузере хранится токен сессии, не пароль.
+let AUTH = { enabled: true, setup_required: false, source: "", min_length: 6 };
+
+function showAuthScreen(mode) {   // "login" | "setup"
+  const setup = mode === "setup";
+  const scr = document.getElementById("login-screen");
+  scr.dataset.mode = mode;
+  document.getElementById("login-title").textContent = setup ? "Придумайте пароль" : "Вход";
+  const note = document.getElementById("login-note");
+  note.style.display = setup ? "" : "none";
+  note.textContent = setup ? `Пароль для входа в webui, минимум ${AUTH.min_length} символов. ` +
+    "На сервере хранится только его хэш; сменить можно во вкладке «Настройки»." : "";
+  document.getElementById("login-confirm-wrap").style.display = setup ? "" : "none";
+  document.getElementById("login-token").setAttribute("autocomplete", setup ? "new-password" : "current-password");
+  document.getElementById("login-btn").textContent = setup ? "Сохранить и войти" : "Войти";
+  document.getElementById("login-err").textContent = "";
+  document.getElementById("appheader").style.display = "none";
+  document.getElementById("appmain").style.display = "none";
+  scr.style.display = "flex";
+  document.getElementById("login-token").focus();
+}
+
+async function bootAuth() {
+  let s;
+  try {
+    const res = await fetch("/api/auth/status", { headers: authHeaders() });
+    s = await res.json();
+  } catch (e) {
+    showAuthScreen("login");
+    document.getElementById("login-err").textContent = "Сервер недоступен — обновите страницу";
+    return;
+  }
+  AUTH = s;
+  document.getElementById("logout-btn").style.display = s.enabled ? "" : "none";
+  if (!s.enabled || s.authenticated) {
+    document.getElementById("login-screen").style.display = "none";
+    showApp();
+    return;
+  }
+  TOKEN = "";
+  localStorage.removeItem(TOKEN_KEY);
+  showAuthScreen(s.setup_required ? "setup" : "login");
+}
+
+async function submitAuth() {
+  const mode = document.getElementById("login-screen").dataset.mode;
+  const pwEl = document.getElementById("login-token");
+  const cfEl = document.getElementById("login-confirm");
   const err = document.getElementById("login-err");
+  const pw = pwEl.value;   // без trim: пробелы — законная часть пароля
   err.textContent = "";
-  if (!token) { err.textContent = "Введите токен"; return; }
-  const ok = await tryLogin(token);
-  if (!ok) err.textContent = "Неверный токен";
-});
-document.getElementById("login-token").addEventListener("keydown", e => {
-  if (e.key === "Enter") document.getElementById("login-btn").click();
-});
+  if (!pw) { err.textContent = "Введите пароль"; return; }
+  if (mode === "setup") {
+    if (pw.length < AUTH.min_length) { err.textContent = `Минимум ${AUTH.min_length} символов`; return; }
+    if (pw !== cfEl.value) { err.textContent = "Пароли не совпадают"; return; }
+  }
+  let res, data;
+  try {
+    res = await fetch(mode === "setup" ? "/api/auth/setup" : "/api/auth/login", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: pw }),
+    });
+    data = await res.json().catch(() => ({}));
+  } catch (e) { err.textContent = "Сервер недоступен"; return; }
+  if (!res.ok) {
+    err.textContent = data.detail || ("HTTP " + res.status);
+    if (res.status === 409) bootAuth();   // режим сменился (пароль задали с другого устройства)
+    return;
+  }
+  TOKEN = data.token || "";
+  localStorage.setItem(TOKEN_KEY, TOKEN);
+  pwEl.value = ""; cfEl.value = "";
+  bootAuth();
+}
+document.getElementById("login-btn").addEventListener("click", submitAuth);
+["login-token", "login-confirm"].forEach(id =>
+  document.getElementById(id).addEventListener("keydown", e => { if (e.key === "Enter") submitAuth(); }));
 document.getElementById("logout-btn").addEventListener("click", logout);
 
-if (TOKEN) {
-  tryLogin(TOKEN).then(ok => { if (!ok) logout(); });
-} else {
-  document.getElementById("login-screen").style.display = "flex";
-}
+bootAuth();

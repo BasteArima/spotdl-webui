@@ -22,12 +22,14 @@ OUTPUT_TEMPLATE = os.environ.get(
     "/music/spotify/{album-artist}/{album}/{track-number} - {title}.{output-ext}",
 )
 AUDIO_FORMAT = os.environ.get("AUDIO_FORMAT", "mp3")
-# Битрейт конвертации (заливка файлов, Deezer, Spotify-апгрейд). 320k — максимум,
-# что отдаёт Spotify (lossy Ogg → mp3). "auto"/"" — не форсировать (ffmpeg default).
-UPLOAD_BITRATE = os.environ.get("UPLOAD_BITRATE", "320k")
+# Настраиваемые из UI параметры (битрейт, потоки, паузы, лимиты, автосинк…)
+# живут в app/settings.py: env для них — значение ПО УМОЛЧАНИЮ, UI переопределяет.
 
-# Авторизация. Без токена сервис стартовать не должен (см. main.py).
-APP_AUTH_TOKEN = os.environ.get("APP_AUTH_TOKEN", "")
+# Авторизация (см. app/auth.py). AUTH_ENABLED=false — вход отключён целиком
+# (сервис только в локалке). Пароль: APP_PASSWORD (старое имя APP_AUTH_TOKEN
+# тоже принимается); если не задан — пароль придумывается в UI при первом входе.
+AUTH_ENABLED = os.environ.get("AUTH_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+APP_PASSWORD = (os.environ.get("APP_PASSWORD") or os.environ.get("APP_AUTH_TOKEN") or "").strip()
 
 # Путь к исполняемому spotdl (в образе доступен в PATH)
 SPOTDL_BIN = os.environ.get("SPOTDL_BIN", "spotdl")
@@ -56,46 +58,6 @@ ZOTIFY_CREDENTIALS_FILE = os.environ.get(
     "ZOTIFY_CREDENTIALS_FILE", os.path.join(CONF_DIR, "zotify_credentials.json"))
 ZOTIFY_USERNAME = os.environ.get("ZOTIFY_USERNAME", "")
 ZOTIFY_PASSWORD = os.environ.get("ZOTIFY_PASSWORD", "")
-# very_high=320k (нужен Premium), high=160k, normal=96k, auto=макс. для аккаунта
-ZOTIFY_QUALITY = os.environ.get("ZOTIFY_QUALITY", "very_high")
-# Безопасный режим (анти-бан) = качать со СКОРОСТЬЮ ПРОСЛУШИВАНИЯ (real-time).
-# Массовая закачка и апгрейд — всегда real-time; одиночные «Spotify 320k» —
-# real-time только при включённой галочке. Тумблер есть в UI.
-ZOTIFY_SAFE_MODE = os.environ.get("ZOTIFY_SAFE_MODE", "true").strip().lower() in ("1", "true", "yes", "on")
-
-
-def _int_env(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, default) or default)
-    except (TypeError, ValueError):
-        return default
-
-
-# Сколько параллельных загрузок держит сам spotdl. По умолчанию у него 4, и на
-# каждую завершённую загрузку запускается ffmpeg — на слабом NAS это забивает
-# все ядра. 2 — компромисс: скорость почти та же (упор в сеть), CPU вдвое ниже.
-SPOTDL_THREADS = _int_env("SPOTDL_THREADS", 2)
-
-
-# Idle-пауза (сек) МЕЖДУ треками поверх real-time (как Zotify bulk_wait_time).
-# Применяется к апгрейду (всегда) и к массовой «Скачать все» (если безопасный режим).
-ZOTIFY_BULK_WAIT_MIN = _int_env("ZOTIFY_BULK_WAIT_MIN", 5)
-ZOTIFY_BULK_WAIT_MAX = _int_env("ZOTIFY_BULK_WAIT_MAX", 15)
-
-
-# Апгрейд (Step 2): пропускать файлы, у которых битрейт уже >= порога (kbps).
-# По умолчанию 300, чтобы файлы ~320k не апгрейдились повторно, а старые (128-160k)
-# обновлялись. Согласовано с UPLOAD_BITRATE=320k.
-UPGRADE_MIN_BITRATE = _int_env("UPGRADE_MIN_BITRATE", 300)
-# Лимит апгрейд-загрузок в сутки (анти-бан). 0 = без лимита (real-time и так медленно).
-UPGRADE_PER_DAY = _int_env("UPGRADE_PER_DAY", 0)
-
-# Таймаут (сек) на ОДИН подпроцесс-скачивание трека (Deezer/Spotify/YouTube/заливка).
-# Сторож убивает зависший процесс (напр. оборванную librespot-сессию посреди стрима),
-# чтобы он не заморозил всю очередь. ВАЖНО: real-time-загрузка идёт со скоростью
-# прослушивания и МОЛЧИТ весь трек, поэтому таймаут — щедрый потолок (час), иначе
-# длинный честный трек (микс/сет/классика) убьётся как «зависший». 0 = без таймаута.
-DOWNLOAD_TRACK_TIMEOUT = _int_env("DOWNLOAD_TRACK_TIMEOUT", 3600)
 
 
 # --- Liked Songs (spotdl-запрос `saved`) --------------------------------------
@@ -148,18 +110,7 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-def _env_bool(name: str, default: bool) -> bool:
-    val = os.environ.get(name)
-    if val is None:
-        return default
-    return val.strip().lower() in ("1", "true", "yes", "on")
-
-
-# Фоновый автосинк (замена отдельного контейнера-автосинка).
-# Интервал в часах; 0 или отрицательное — планировщик выключен.
-AUTOSYNC_INTERVAL_HOURS = _env_float("AUTOSYNC_INTERVAL_HOURS", 24.0)
-# Запускать ли один sync-всех вскоре после старта контейнера.
-AUTOSYNC_ON_START = _env_bool("AUTOSYNC_ON_START", True)
+# Фоновый автосинк: интервал и «при старте» — в app/settings.py (меняются из UI).
 # Задержка перед первым автосинком после старта (сек), чтобы веб успел подняться.
 AUTOSYNC_START_DELAY = _env_float("AUTOSYNC_START_DELAY", 20.0)
 

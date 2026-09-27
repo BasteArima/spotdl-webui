@@ -59,7 +59,7 @@ def environment_status() -> dict:
     # человекочитаемые предупреждения для баннера
     warnings = []
     if not checks["cookies_present"]:
-        warnings.append("Нет cookies.txt в /conf — YouTube может требовать вход «не робот».")
+        warnings.append("Нет YouTube cookies — YouTube может требовать вход «не робот». Загрузите cookies.txt во вкладке «Настройки».")
     if not checks["music_writable"]:
         warnings.append("Папка музыки недоступна на запись (uid 998) — новые треки не сохранятся.")
     if not checks["playlists_writable"]:
