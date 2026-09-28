@@ -43,7 +43,8 @@ services:
     image: ghcr.io/bastearima/spotdl-webui:latest
     container_name: spotdl-webui
     restart: unless-stopped
-    mem_limit: 1g
+    mem_limit: 2g
+    memswap_limit: 2g
     cpus: 2.0
     ports:
       - "4535:8000"
