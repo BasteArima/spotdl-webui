@@ -631,7 +631,25 @@ def _run_process(job: Job, cmd: List[str], cwd: str = "/",
         job.append("[cancelled] подпроцесс остановлен")
     job.returncode = proc.returncode
     job.append(f"[exit] код возврата: {proc.returncode}")
+    print(f"[{job.id}] [exit] код возврата: {proc.returncode}", flush=True)
+    if proc.returncode < 0 and not watch["reason"]:
+        # убит не нами (не таймаут и не отмена)
+        note = f"[exit] процесс убит сигналом {_signal_name(-proc.returncode)}"
+        if proc.returncode == -9:
+            note += (" — чаще всего это нехватка памяти: при упоре в mem_limit контейнера "
+                     "ядро убивает самый большой процесс. Поднимите mem_limit в compose "
+                     "или уменьшите «Параллельных загрузок spotdl».")
+        job.append(note)
+        print(f"[{job.id}] {note}", flush=True)
     return proc.returncode, out_lines
+
+
+def _signal_name(num: int) -> str:
+    try:
+        import signal
+        return f"{signal.Signals(num).name} ({num})"
+    except (ValueError, AttributeError):
+        return str(num)
 
 
 def run_spotdl(job: Job, args: List[str], timeout: Optional[float] = None,
@@ -826,13 +844,31 @@ def download_match_args(youtube_url: str, spotify_url: str) -> List[str]:
 
 # ------------------------------------------------------------------ раннеры задач
 def _reset_errors_file(safe: str) -> None:
-    """Удаляет errors-файл плейлиста перед sync. spotdl пишет --save-errors в
+    """Убирает errors-файл плейлиста перед sync. spotdl пишет --save-errors в
     режиме ДОЗАПИСИ, поэтому без сброса повторные сканы копят дубли и устаревшие
-    записи. После удаления spotdl создаёт файл заново со свежим полным списком."""
+    записи. После сброса spotdl создаёт файл заново со свежим полным списком.
+    Старый файл не удаляется, а откладывается в .prev: если spotdl оборвётся
+    (убит, упал), он не успеет записать новый — тогда вернём прежний
+    (_finish_errors_file), чтобы «Ненайденные» не опустели."""
     p = config.errors_path(safe)
     try:
         if os.path.exists(p):
-            os.remove(p)
+            os.replace(p, p + ".prev")
+    except OSError:
+        pass
+
+
+def _finish_errors_file(job: Job, safe: str, ok: bool) -> None:
+    p = config.errors_path(safe)
+    prev = p + ".prev"
+    if not os.path.exists(prev):
+        return
+    try:
+        if not ok and not os.path.exists(p):
+            os.replace(prev, p)
+            job.append("[sync] spotdl не завершился — список ненайденных оставлен прежним")
+        else:
+            os.remove(prev)
     except OSError:
         pass
 
@@ -893,6 +929,7 @@ def _sync_locked_inner(job: Job, pl: playlists.Playlist, prog: "SyncProgress") -
         # мягкая отмена: текущий spotdl допишет m3u/save-file, sync-all встанет
         # между плейлистами (а не порвёт файлы на полузаписи).
         rc, _out = run_spotdl(job, args or sync_args(pl), kill_on_cancel=False, on_line=prog.feed)
+        _finish_errors_file(job, pl.safe, ok=(rc == 0))
     if prog.yt_blocked and prog.last_failed_url:
         job.append(f"[youtube] проверяю причину: проба yt-dlp по {prog.last_failed_url}")
         raw = _youtube_probe(prog.last_failed_url)

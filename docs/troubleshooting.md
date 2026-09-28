@@ -125,3 +125,10 @@ docker exec spotdl-webui cat /sys/fs/cgroup/memory.stat | grep -E '^(anon|file) 
 
 **Контейнер перезапускается посреди синка.** Упёрся в `mem_limit`:
 `docker inspect spotdl-webui --format '{{.State.OOMKilled}}'` → `true` — поднимите лимит.
+
+**Синк оборвался на середине, контейнер жив.** В логе задачи `[exit] процесс убит сигналом
+SIGKILL (9)`, строк `Saved errors…`/`Saved results…` нет. При упоре в `mem_limit` ядро убивает
+не весь контейнер, а самый большой процесс в нём — обычно spotdl, так что `OOMKilled` остаётся
+`false`. Подтвердить на хосте: `dmesg | grep -i "out of memory"`. Поднимите `mem_limit` или
+уменьшите «Параллельных загрузок spotdl». Список «Ненайденных» после такого обрыва остаётся
+прежним; уже скачанное следующий синк пропустит.
