@@ -160,12 +160,16 @@ class SyncProgress:
     карточек плейлистов; сырой лог остаётся для подробностей).
 
     spotdl печатает общий счётчик «K/N complete» и статус трека «Artist - Title:
-    Done|Skipped|Converting…». Строки «Error» по треку он НЕ печатает (у ошибки нет
-    прироста прогресса), поэтому ошибки = обработано − скачано − пропущено."""
+    Done|Skipped|Converting…». Статуса «Error» у трека нет — ошибки = обработано −
+    скачано − пропущено. Из них по строкам исключений отдельно считаются
+    «не найдено» (LookupError: трека нет на YouTube) и «YouTube не отдал»
+    (AudioProviderError: yt-dlp не скачал найденное — обычно лимит YouTube
+    или протухшие cookies; лечится повтором синка, а не ручным поиском)."""
 
     _COMPLETE = re.compile(r"(\d+)/(\d+) complete\s*$")
     _FOUND = re.compile(r"^Found (\d+) songs in ")
     _SONG = re.compile(r"^(?P<song>.+): (?P<st>Downloading|Converting|Embedding metadata|Done|Skipped)\s*$")
+    BLOCK_STREAK = 8    # столько «YouTube не отдал» подряд — похоже на блок
 
     def __init__(self, playlist_id: str, name: str, index: int = 0, count: int = 0):
         self.playlist_id, self.name = playlist_id, name
@@ -173,6 +177,9 @@ class SyncProgress:
         self.phase = "prepare"   # list (Liked Songs) | prepare (метаданные) | download | done
         self.total = 0
         self.processed = self.downloaded = self.skipped = 0
+        self.lookup_failed = self.download_failed = 0
+        self.dl_streak = 0          # «YouTube не отдал» подряд, без удачных загрузок
+        self.yt_blocked = False
         self.current = ""
         self.started_dl: Optional[float] = None
         self.finished: Optional[float] = None
@@ -190,8 +197,24 @@ class SyncProgress:
             self.finished, self.current = time.time(), ""
         self._changed(force=True)
 
-    def feed(self, line: str) -> None:
+    def feed(self, line: str) -> Optional[str]:
+        """Разобрать строку вывода spotdl. Возвращает строку-пояснение для лога
+        задачи, когда есть что сказать человеку (подозрение на блок YouTube)."""
         line = line.strip()
+        if line.startswith("LookupError:"):
+            self.lookup_failed += 1
+            return None
+        if line.startswith("AudioProviderError:"):
+            self.download_failed += 1
+            self.dl_streak += 1
+            if self.dl_streak == self.BLOCK_STREAK and not self.yt_blocked:
+                self.yt_blocked = True
+                self._changed(force=True)
+                return (f"[youtube] {self.BLOCK_STREAK} загрузок подряд не удались — похоже, YouTube "
+                        "ограничил загрузки (лимит в час или протухшие cookies). Остальные треки "
+                        "этого синка, скорее всего, тоже не скачаются: повторите синк через "
+                        "несколько часов, уже скачанное spotdl пропустит.")
+            return None
         m = self._COMPLETE.search(line)
         if m:
             self.processed, self.total = int(m.group(1)), int(m.group(2))
@@ -208,6 +231,7 @@ class SyncProgress:
             st = m.group("st")
             if st == "Done":
                 self.downloaded += 1
+                self.dl_streak = 0
             elif st == "Skipped":
                 self.skipped += 1
             else:
@@ -235,6 +259,8 @@ class SyncProgress:
             "index": self.index, "count": self.count, "phase": self.phase,
             "total": self.total, "processed": self.processed, "downloaded": self.downloaded,
             "skipped": self.skipped, "failed": self.failed, "current": self.current,
+            "lookup_failed": self.lookup_failed, "download_failed": self.download_failed,
+            "yt_blocked": self.yt_blocked,
             "eta_seconds": eta, "finished": self.finished,
         }
 
@@ -263,7 +289,9 @@ def playlist_stats() -> dict:
 def _record_sync(prog: "SyncProgress", ok: bool) -> None:
     global _stats_cache
     entry = {"ts": time.time(), "ok": ok, "name": prog.name, "total": prog.total,
-             "downloaded": prog.downloaded, "skipped": prog.skipped, "failed": prog.failed}
+             "downloaded": prog.downloaded, "skipped": prog.skipped, "failed": prog.failed,
+             "lookup_failed": prog.lookup_failed, "download_failed": prog.download_failed,
+             "yt_blocked": prog.yt_blocked}
     playlist_stats()        # прогреть кэш
     with _stats_lock:
         data = dict(_stats_cache or {})
@@ -513,7 +541,7 @@ def _redact(cmd: List[str]) -> str:
 
 def _run_process(job: Job, cmd: List[str], cwd: str = "/",
                  timeout: Optional[float] = None, kill_on_cancel: bool = True,
-                 on_line: Optional[Callable[[str], None]] = None):
+                 on_line: Optional[Callable[[str], Optional[str]]] = None):
     """Запускает процесс, построчно пишет stdout/stderr в лог задачи И в stdout
     контейнера (видно в `docker logs`). Возвращает (код_возврата, строки_вывода).
 
@@ -583,9 +611,12 @@ def _run_process(job: Job, cmd: List[str], cwd: str = "/",
         print(f"[{job.id}] {line}", flush=True)  # дублируем в docker logs
         if on_line:
             try:
-                on_line(line)
+                note = on_line(line)   # разбор прогресса; может вернуть пояснение
             except Exception:  # noqa: BLE001 — разбор прогресса не должен ронять задачу
-                pass
+                note = None
+            if note:
+                job.append(note)
+                print(f"[{job.id}] {note}", flush=True)
     proc.wait()
 
     if watch["reason"] == "timeout":
@@ -599,7 +630,7 @@ def _run_process(job: Job, cmd: List[str], cwd: str = "/",
 
 
 def run_spotdl(job: Job, args: List[str], timeout: Optional[float] = None,
-               kill_on_cancel: bool = True, on_line: Optional[Callable[[str], None]] = None):
+               kill_on_cancel: bool = True, on_line: Optional[Callable[[str], Optional[str]]] = None):
     """Запуск spotdl с cwd=/ — критично: spotdl 4.5.0 прогоняет части пути --m3u
     через sanitize, который вырезает '/', превращая абсолютный путь в
     относительный. Из cwd=/ он резолвится обратно в /music/... (как автосинк).
@@ -688,6 +719,17 @@ def _liked_songs_file(job: Job, pl: playlists.Playlist) -> tuple:
     return path, count
 
 
+def _youtube_pace_args() -> List[str]:
+    """Пауза yt-dlp перед каждой загрузкой — только для синков (массовых):
+    YouTube режет загрузки после нескольких сотен подряд, и весь хвост синка
+    уходит в «YT-DLP download error». Через «=», чтобы значение с «--» не
+    приняли за флаг."""
+    n = int(settings.get("youtube_sleep") or 0)
+    if n <= 0:
+        return []
+    return [f"--yt-dlp-args=--sleep-interval {n} --max-sleep-interval {n * 2}"]
+
+
 def sync_args(pl: playlists.Playlist) -> List[str]:
     """Позиционный запрос идёт ПЕРВЫМ: флаги со списком значений (--audio,
     --lyrics) иначе съели бы его."""
@@ -698,7 +740,7 @@ def sync_args(pl: playlists.Playlist) -> List[str]:
         "--save-file", config.savefile_path(pl.id),
         "--save-errors", config.errors_path(pl.safe),
         "--m3u", config.m3u_path(pl.safe),
-    ] + _common_output_args()
+    ] + _common_output_args() + _youtube_pace_args()
 
 
 def liked_args(pl: playlists.Playlist, songs_file: str) -> List[str]:
@@ -711,7 +753,7 @@ def liked_args(pl: playlists.Playlist, songs_file: str) -> List[str]:
         "--save-file", config.savefile_path(pl.id),
         "--save-errors", config.errors_path(pl.safe),
         "--m3u", config.m3u_path(pl.safe),
-    ] + _common_output_args()
+    ] + _common_output_args() + _youtube_pace_args()
 
 
 def download_match_args(youtube_url: str, spotify_url: str) -> List[str]:

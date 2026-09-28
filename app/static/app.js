@@ -571,6 +571,16 @@ function badName(s) {
   return !s.includes(" - ");
 }
 
+const ERR_LABELS = {
+  LookupError: ["не найден", "spotdl не нашёл трек на YouTube — найдите ссылку сами или возьмите другой источник"],
+  AudioProviderError: ["YouTube не отдал", "Трек найден, но yt-dlp его не скачал (обычно лимит YouTube или устаревшие cookies). " +
+    "Ссылка уже подставлена: «Скачать» повторит загрузку; следующий синк тоже попробует снова."],
+};
+function errTag(type) {
+  const [text, title] = ERR_LABELS[type] || [type || "?", ""];
+  return el("span", { class: "tag err", title: title || type || "" }, [text]);
+}
+
 async function resolveBadNames(rows) {
   const bad = rows.filter(r => badName(r.song) && !RESOLVED[r.spotify_url]);
   if (!bad.length) return;
@@ -622,6 +632,8 @@ function renderErrors() {
     const groupRows = [];
     tracks.forEach(t => {
       const input = el("input", { type: "text", class: "yt-input", placeholder: "YouTube / YT-Music URL" });
+      // трек найден, но yt-dlp его не скачал — ссылка уже есть, «Скачать» повторит
+      if (t.source_url) input.value = t.source_url;
       const dlBtn = el("button", { class: "btn small" }, ["Скачать"]);
       const dzBtn = el("button", { class: "btn secondary small", title: "Скачать с Deezer по ISRC (нужен ARL) — для треков, которых нет на YouTube" }, ["Deezer"]);
       const ztBtn = el("button", { class: "btn secondary small", title: "Скачать напрямую со Spotify (librespot, 320k с Premium). Нужны креды Spotify." }, ["Spotify 320k"]);
@@ -635,7 +647,7 @@ function renderErrors() {
       const statusWrap = el("span", { class: "err-status", style: "display:none" });
       const rowEl = el("tr", {}, [
         nameCell,
-        el("td", {}, [el("span", { class: "tag err" }, [t.error_type || "?"])]),
+        el("td", {}, [errTag(t.error_type)]),
         el("td", {}, [el("a", { href: t.spotify_url, target: "_blank", rel: "noopener" }, ["Spotify ↗"])]),
         el("td", {}, [ytLink]),
         el("td", {}, [input]),
@@ -682,7 +694,7 @@ function renderErrors() {
   }
   const grand = ERROR_GROUPS.reduce((n, g) => n + g.tracks.length, 0);
   document.getElementById("err-total").textContent =
-    grand ? `всего ненайдено: ${grand}` + (total !== grand ? ` (показано: ${total})` : "") : "";
+    grand ? `всего не скачано: ${grand}` + (total !== grand ? ` (показано: ${total})` : "") : "";
 
   // дорезолвить настоящие имена для строк с битым именем (musicShelfRenderer и т.п.)
   resolveBadNames(ROWS);
@@ -904,7 +916,7 @@ function updatePlaylistLive(syncs) {
     } else if (s && s.status === "queued") {
       chipText = "в очереди"; chipCls = "muted";
     } else if (p.not_found) {
-      chipText = `${p.not_found} не найдено`; chipCls = "warn";
+      chipText = `${p.not_found} не скачано`; chipCls = "warn";
     } else if (p.last_sync) {
       chipText = p.last_sync.ok ? "готово" : "ошибка синка"; chipCls = p.last_sync.ok ? "ok" : "danger";
     } else {
@@ -930,6 +942,7 @@ function updatePlaylistLive(syncs) {
       let t = "синк " + fmtAgo(p.last_sync.ts);
       if (p.last_sync.downloaded) t += `, +${p.last_sync.downloaded}`;
       parts.push(t);
+      if (p.last_sync.yt_blocked) parts.push("⚠ " + YT_BLOCK_HINT);
     } else if (p.tracks == null && !(s && s.status === "running")) {
       parts.push("ещё не синхронизировался");
     }
@@ -1091,13 +1104,27 @@ const PHASE_TEXT = {
   list: "получаю список «Любимых» из Spotify…",
   prepare: "собираю данные треков…",
 };
+// Неудачи синка по сортам: «не найдено» — трека нет на YouTube (добивать
+// вручную), «YouTube не отдал» — найден, но не скачан (лимит YouTube / cookies:
+// лечится повтором синка). Старые итоги без разбивки — одним числом.
+function failParts(p) {
+  if (p.lookup_failed == null) return p.failed ? [`не удалось ${p.failed}`] : [];
+  const out = [];
+  if (p.lookup_failed) out.push(`не найдено ${p.lookup_failed}`);
+  if (p.download_failed) out.push(`YouTube не отдал ${p.download_failed}`);
+  const other = p.failed - p.lookup_failed - p.download_failed;
+  if (other > 0) out.push(`ошибок ${other}`);
+  return out;
+}
+const YT_BLOCK_HINT = "YouTube перестал отдавать аудио — повторите синк через несколько часов";
+
 function syncDetail(p) {
   if (p.phase === "list") return PHASE_TEXT.list;
   if (p.phase === "prepare") return PHASE_TEXT.prepare + (p.total ? ` ${p.total} ${plural(p.total, "трек", "трека", "треков")}` : "");
   const parts = [`${p.processed} из ${p.total}`];
   if (p.downloaded) parts.push(`скачано ${p.downloaded}`);
   if (p.skipped) parts.push(`уже было ${p.skipped}`);
-  if (p.failed) parts.push(`не найдено ${p.failed}`);
+  parts.push(...failParts(p));
   if (p.eta_seconds != null) parts.push(fmtLeft(p.eta_seconds));
   return parts.join(" · ");
 }
@@ -1105,7 +1132,8 @@ function syncSummary(p) {
   const parts = [];
   if (p.downloaded) parts.push(`скачано ${p.downloaded}`);
   if (p.skipped) parts.push(`уже было ${p.skipped}`);
-  if (p.failed) parts.push(`не найдено ${p.failed}`);
+  parts.push(...failParts(p));
+  if (p.yt_blocked) parts.push(YT_BLOCK_HINT);
   return parts.length ? parts.join(" · ") : (p.total ? "новых треков нет" : "");
 }
 
@@ -1157,7 +1185,8 @@ function renderStatusStrip(d) {
     const stats = [];
     if (p.downloaded) stats.push(`скачано ${p.downloaded}`);
     if (p.skipped) stats.push(`уже было ${p.skipped}`);
-    if (p.failed) stats.push(`не найдено ${p.failed}`);
+    stats.push(...failParts(p));
+    if (p.yt_blocked) stats.push("⚠ " + YT_BLOCK_HINT);
     items.push(stripItem({
       icon: "⟳", iconCls: "spin", title,
       sub: dl ? (p.current ? `Сейчас: ${p.current}` : "качаю…") : syncDetail(p),
