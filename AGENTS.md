@@ -177,8 +177,11 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
   `--simple-tui` («K/N complete», «трек: Done/Skipped»; ошибки = обработано −
   скачано − пропущено; из них `LookupError:` — «не найдено», `AudioProviderError:` —
   «YouTube не отдал»: найден, но yt-dlp не скачал; 8 подряд = вероятный блок YouTube,
-  пишется пояснение в лог и `yt_blocked` в итог). Синкам (не ручным загрузкам) идёт
-  `--yt-dlp-args=--sleep-interval N --max-sleep-interval 2N` (`youtube_sleep`, 10 с):
+  пишется пояснение в лог и `yt_blocked` в итог; после синка — одна проба
+  `python -m yt_dlp --simulate` по последней такой ссылке (`jobs._youtube_probe`):
+  spotdl прячет настоящую ошибку yt-dlp в DEBUG, а проба даёт её в лог и
+  `yt_reason` → подсказка на карточке). Синкам (не ручным загрузкам) идёт
+  `--yt-dlp-args=--sleep-requests 1 --sleep-interval N --max-sleep-interval 2N` (`youtube_sleep`, 10 с):
   без пауз YouTube на ~400-м треке подряд перестал отдавать аудио. Подпроцессам ставится `COLUMNS=1000`: rich иначе рвёт
   длинные строки на 80 колонок.
 - **Step 2 — апгрейд** ([app/upgrade.py](app/upgrade.py)): фоновый поток проходит по

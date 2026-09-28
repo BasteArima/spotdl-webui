@@ -942,7 +942,7 @@ function updatePlaylistLive(syncs) {
       let t = "синк " + fmtAgo(p.last_sync.ts);
       if (p.last_sync.downloaded) t += `, +${p.last_sync.downloaded}`;
       parts.push(t);
-      if (p.last_sync.yt_blocked) parts.push("⚠ " + YT_BLOCK_HINT);
+      if (p.last_sync.yt_blocked) parts.push("⚠ " + (p.last_sync.yt_reason || YT_BLOCK_HINT));
     } else if (p.tracks == null && !(s && s.status === "running")) {
       parts.push("ещё не синхронизировался");
     }
@@ -1133,7 +1133,7 @@ function syncSummary(p) {
   if (p.downloaded) parts.push(`скачано ${p.downloaded}`);
   if (p.skipped) parts.push(`уже было ${p.skipped}`);
   parts.push(...failParts(p));
-  if (p.yt_blocked) parts.push(YT_BLOCK_HINT);
+  if (p.yt_blocked) parts.push(p.yt_reason || YT_BLOCK_HINT);
   return parts.length ? parts.join(" · ") : (p.total ? "новых треков нет" : "");
 }
 
@@ -1186,7 +1186,7 @@ function renderStatusStrip(d) {
     if (p.downloaded) stats.push(`скачано ${p.downloaded}`);
     if (p.skipped) stats.push(`уже было ${p.skipped}`);
     stats.push(...failParts(p));
-    if (p.yt_blocked) stats.push("⚠ " + YT_BLOCK_HINT);
+    if (p.yt_blocked) stats.push("⚠ " + YT_BLOCK_HINT);   // причину проба узнает после синка
     items.push(stripItem({
       icon: "⟳", iconCls: "spin", title,
       sub: dl ? (p.current ? `Сейчас: ${p.current}` : "качаю…") : syncDetail(p),

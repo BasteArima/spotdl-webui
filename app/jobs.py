@@ -180,6 +180,8 @@ class SyncProgress:
         self.lookup_failed = self.download_failed = 0
         self.dl_streak = 0          # «YouTube не отдал» подряд, без удачных загрузок
         self.yt_blocked = False
+        self.last_failed_url = ""   # ссылка YouTube последнего «не отдал» — для пробы
+        self.yt_reason = ""         # что на самом деле ответил YouTube (проба yt-dlp)
         self.current = ""
         self.started_dl: Optional[float] = None
         self.finished: Optional[float] = None
@@ -206,6 +208,9 @@ class SyncProgress:
             return None
         if line.startswith("AudioProviderError:"):
             self.download_failed += 1
+            m = re.search(r"https?://\S+", line)
+            if m:
+                self.last_failed_url = m.group(0)
             self.dl_streak += 1
             if self.dl_streak == self.BLOCK_STREAK and not self.yt_blocked:
                 self.yt_blocked = True
@@ -260,7 +265,7 @@ class SyncProgress:
             "total": self.total, "processed": self.processed, "downloaded": self.downloaded,
             "skipped": self.skipped, "failed": self.failed, "current": self.current,
             "lookup_failed": self.lookup_failed, "download_failed": self.download_failed,
-            "yt_blocked": self.yt_blocked,
+            "yt_blocked": self.yt_blocked, "yt_reason": self.yt_reason,
             "eta_seconds": eta, "finished": self.finished,
         }
 
@@ -291,7 +296,7 @@ def _record_sync(prog: "SyncProgress", ok: bool) -> None:
     entry = {"ts": time.time(), "ok": ok, "name": prog.name, "total": prog.total,
              "downloaded": prog.downloaded, "skipped": prog.skipped, "failed": prog.failed,
              "lookup_failed": prog.lookup_failed, "download_failed": prog.download_failed,
-             "yt_blocked": prog.yt_blocked}
+             "yt_blocked": prog.yt_blocked, "yt_reason": prog.yt_reason}
     playlist_stats()        # прогреть кэш
     with _stats_lock:
         data = dict(_stats_cache or {})
@@ -727,7 +732,65 @@ def _youtube_pace_args() -> List[str]:
     n = int(settings.get("youtube_sleep") or 0)
     if n <= 0:
         return []
-    return [f"--yt-dlp-args=--sleep-interval {n} --max-sleep-interval {n * 2}"]
+    # --sleep-requests — как в пресете yt-dlp `-t sleep`: блок срабатывает на
+    # запросе данных видео («Getting audio meta»), а не только на скачивании
+    return [f"--yt-dlp-args=--sleep-requests 1 --sleep-interval {n} --max-sleep-interval {n * 2}"]
+
+
+def youtube_reason_hint(error: str) -> str:
+    """Ошибка yt-dlp → что это значит и что делать (по-русски)."""
+    low = (error or "").lower()
+    if not error:
+        return ("Проба прошла: YouTube снова отдаёт аудио — ограничение было временным. "
+                "Повторите синк.")
+    if "cookies are no longer valid" in low:
+        return ("cookies.txt устарели: браузер сменил их (ротация), и YouTube больше не видит вход — "
+                "без него лимит загрузок маленький. Экспортируйте cookies заново из ПРИВАТНОГО окна "
+                "и сразу закройте его (иначе браузер снова их сменит), загрузите в «Настройки» и "
+                "повторите синк.")
+    if "rate-limited" in low:
+        who = ("ваш аккаунт" if "your account" in low
+               else "сессию — вход по cookies YouTube не распознал (обновите cookies.txt)")
+        return (f"YouTube ограничил {who} примерно на час: слишком много видео подряд. "
+                "Повторите синк позже; реже блокирует пауза побольше и 1 параллельная загрузка.")
+    if "not a bot" in low or "sign in" in low:
+        return ("YouTube требует вход (проверка «не бот ли вы»): cookies не действуют — обновите "
+                "cookies.txt (экспорт из приватного окна браузера, окно после экспорта закрыть) "
+                "и повторите синк позже.")
+    if "captcha" in low:
+        return "YouTube требует капчу: обновите cookies.txt и повторите синк через несколько часов."
+    if "http error 429" in low or "too many requests" in low:
+        return "YouTube: слишком много запросов (429) — повторите синк через несколько часов."
+    if "http error 403" in low:
+        return ("YouTube отклоняет запросы (403): обычно протухшие cookies или устаревший yt-dlp "
+                "в образе.")
+    return "yt-dlp: " + error[:300]
+
+
+def _youtube_probe(url: str) -> str:
+    """Одна проба yt-dlp (без скачивания) по ссылке, которую YouTube не отдал:
+    spotdl показывает только «YT-DLP download error», а настоящая причина (лимит,
+    проверка на бота, 403) видна лишь в DEBUG. Возвращает строку ERROR yt-dlp или
+    "" если проба прошла."""
+    # предупреждения НЕ глушим: «cookies are no longer valid» приходит именно
+    # предупреждением, а ошибка после него — лишь «Please sign in»
+    cmd = [sys.executable, "-m", "yt_dlp", "--simulate", "--no-playlist",
+           "-f", "bestaudio/best"]
+    if os.path.exists(config.COOKIE_FILE):
+        cmd += ["--cookies", config.COOKIE_FILE]
+    try:
+        r = subprocess.run(cmd + [url], cwd="/", stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return f"проба не удалась: {e}"
+    if r.returncode == 0:
+        return ""
+    lines = [ln.strip() for ln in (r.stderr or "").splitlines() if ln.strip()]
+    errs = [ln for ln in lines if ln.startswith("ERROR:")]
+    err = errs[-1] if errs else (lines[-1] if lines else f"код {r.returncode}")
+    if any("cookies are no longer valid" in ln for ln in lines):
+        err = "cookies are no longer valid; " + err
+    return err
 
 
 def sync_args(pl: playlists.Playlist) -> List[str]:
@@ -830,6 +893,13 @@ def _sync_locked_inner(job: Job, pl: playlists.Playlist, prog: "SyncProgress") -
         # мягкая отмена: текущий spotdl допишет m3u/save-file, sync-all встанет
         # между плейлистами (а не порвёт файлы на полузаписи).
         rc, _out = run_spotdl(job, args or sync_args(pl), kill_on_cancel=False, on_line=prog.feed)
+    if prog.yt_blocked and prog.last_failed_url:
+        job.append(f"[youtube] проверяю причину: проба yt-dlp по {prog.last_failed_url}")
+        raw = _youtube_probe(prog.last_failed_url)
+        if raw:
+            job.append(f"[youtube] ответ YouTube: {raw}")
+        prog.yt_reason = youtube_reason_hint(raw)
+        job.append(f"[youtube] {prog.yt_reason}")
     prog.set_phase("done")
     _record_sync(prog, ok=(rc == 0))
 
