@@ -544,9 +544,42 @@ def _redact(cmd: List[str]) -> str:
     return " ".join(out)
 
 
+class SpotdlLogFilter:
+    """Что из вывода spotdl писать в лог задачи и docker logs. Синк 52
+    плейлистов давал ~3 строки на КАЖДЫЙ уже скачанный трек («Skipping …»,
+    «…: Skipped», «K/N complete») — 90% лога, а лимит Portainer в 10 000 строк
+    вмещал меньше одного автосинка. В лог идут: команда, «Found N songs»,
+    «Downloaded …», ошибки и итог плейлиста (его пишет _sync_locked_inner).
+    Прогресс (SyncProgress) и вызывающий код по-прежнему видят ВСЕ строки."""
+
+    _NOISE = re.compile(
+        r"^Skipping .+ \(file already exists\)"
+        r"|^\d+/\d+ complete$"
+        r"|: (Searching for song|Getting audio meta|Downloading|Converting|"
+        r"Embedding metadata|Done|Skipped)$"
+        r"|^YouTube Music returned no usable results for .+ after \d+ attempts$"
+        # рамка трейсбека rich (по ~80 строк); суть — в строке «XxxError: …» после неё
+        r"|^[╭│╰]")
+
+    def __init__(self) -> None:
+        self._lrc_next = False
+
+    def __call__(self, line: str) -> bool:
+        if self._lrc_next:
+            # строка-причина после «не нашёл текст на …» (HTTPSConnectionPool…)
+            self._lrc_next = False
+            return False
+        if line.startswith("An error occurred while searching for an LRC on "):
+            self._lrc_next = True    # тексты — побочное: их сбои не важны
+            return False
+        return not self._NOISE.search(line)
+
+
 def _run_process(job: Job, cmd: List[str], cwd: str = "/",
                  timeout: Optional[float] = None, kill_on_cancel: bool = True,
-                 on_line: Optional[Callable[[str], Optional[str]]] = None):
+                 on_line: Optional[Callable[[str], Optional[str]]] = None,
+                 keep_line: Optional[Callable[[str], bool]] = None,
+                 display: Optional[List[str]] = None):
     """Запускает процесс, построчно пишет stdout/stderr в лог задачи И в stdout
     контейнера (видно в `docker logs`). Возвращает (код_возврата, строки_вывода).
 
@@ -557,8 +590,11 @@ def _run_process(job: Job, cmd: List[str], cwd: str = "/",
 
     kill_on_cancel=False (sync): отмену НЕ форсируем убийством — текущий spotdl
     доработает и запишет m3u/save-file целиком, а sync-all остановится между
-    плейлистами (мягко, без риска порчи файлов)."""
-    job.append("$ " + _redact(cmd))
+    плейлистами (мягко, без риска порчи файлов).
+
+    keep_line — фильтр строк для лога задачи и docker logs (out_lines и
+    on_line получают всё); display — как показать команду в логе."""
+    job.append("$ " + _redact(display or cmd))
     env = dict(os.environ)
     env.setdefault("PYTHONUNBUFFERED", "1")
     # spotdl пишет через rich, а тот без терминала режет строки на 80 колонок —
@@ -612,8 +648,9 @@ def _run_process(job: Job, cmd: List[str], cwd: str = "/",
         # (COLUMNS=1000) — без этого каждая строка лога весила бы ~1 КБ
         line = line.rstrip()
         out_lines.append(line)
-        job.append(line)
-        print(f"[{job.id}] {line}", flush=True)  # дублируем в docker logs
+        if keep_line is None or keep_line(line):
+            job.append(line)
+            print(f"[{job.id}] {line}", flush=True)  # дублируем в docker logs
         if on_line:
             try:
                 note = on_line(line)   # разбор прогресса; может вернуть пояснение
@@ -661,7 +698,12 @@ def run_spotdl(job: Job, args: List[str], timeout: Optional[float] = None,
     timeout задаём для одиночного скачивания трека (YouTube); для sync — None
     (синк целого плейлиста легитимно долгий) + kill_on_cancel=False (мягкая отмена,
     чтобы не оборвать запись m3u/save-file)."""
-    return _run_process(job, [config.SPOTDL_BIN] + args, cwd="/",
+    cmd = [config.SPOTDL_BIN] + args
+    if config.SPOTDL_BIN == "spotdl":
+        # обёртка: уже скачанные треки — без дозапроса метаданных (app/spotdl_run.py)
+        cmd = [sys.executable, os.path.join(_PROJECT_DIR, "app", "spotdl_run.py")] + args
+    keep = None if settings.get("verbose_spotdl_log") else SpotdlLogFilter()
+    return _run_process(job, cmd, cwd="/", keep_line=keep, display=["spotdl"] + args,
                         timeout=timeout, kill_on_cancel=kill_on_cancel, on_line=on_line)
 
 
@@ -930,6 +972,9 @@ def _sync_locked_inner(job: Job, pl: playlists.Playlist, prog: "SyncProgress") -
         # между плейлистами (а не порвёт файлы на полузаписи).
         rc, _out = run_spotdl(job, args or sync_args(pl), kill_on_cancel=False, on_line=prog.feed)
         _finish_errors_file(job, pl.safe, ok=(rc == 0))
+    summary = _sync_summary(pl.name, prog, rc)
+    job.append(summary)
+    print(f"[{job.id}] {summary}", flush=True)
     if prog.yt_blocked and prog.last_failed_url:
         job.append(f"[youtube] проверяю причину: проба yt-dlp по {prog.last_failed_url}")
         raw = _youtube_probe(prog.last_failed_url)
@@ -939,6 +984,19 @@ def _sync_locked_inner(job: Job, pl: playlists.Playlist, prog: "SyncProgress") -
         job.append(f"[youtube] {prog.yt_reason}")
     prog.set_phase("done")
     _record_sync(prog, ok=(rc == 0))
+
+
+def _sync_summary(name: str, prog: "SyncProgress", rc: int) -> str:
+    parts = [f"всего {prog.total}", f"скачано {prog.downloaded}", f"уже было {prog.skipped}"]
+    if prog.lookup_failed:
+        parts.append(f"не найдено {prog.lookup_failed}")
+    if prog.download_failed:
+        parts.append(f"YouTube не отдал {prog.download_failed}")
+    other = prog.failed - prog.lookup_failed - prog.download_failed
+    if other > 0:
+        parts.append(f"другие ошибки {other}")
+    tail = "" if rc == 0 else f" · spotdl завершился с кодом {rc}"
+    return f"[итог] «{name}»: " + " · ".join(parts) + tail
 
 
 def _run_sync_playlist(job: Job, pl: playlists.Playlist) -> None:
@@ -1242,6 +1300,8 @@ def job_groups() -> List[dict]:
         by_title: Dict[str, List[Job]] = {}
         for jid in _jobs_order:
             j = _jobs[jid]
+            if j.kind in ("sync", "sync-all", "autosync"):
+                continue    # повторные синки с тем же заголовком — не пакет загрузок
             by_title.setdefault(j.title, []).append(j)
         groups: List[dict] = []
         for title, members in by_title.items():

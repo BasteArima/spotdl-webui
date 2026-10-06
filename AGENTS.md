@@ -166,7 +166,17 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
 
 - [app/jobs.py](app/jobs.py): две дорожки воркеров — **interactive** (ручные действия)
   и **background** (тяжёлый автосинк/«Синхронизировать всё»). Файловый лок на плейлист
-  (`/conf/.webui-locks/`). Логи задач в памяти (cap 4000 строк) + дублируются в
+  (`/conf/.webui-locks/`). spotdl запускается через [app/spotdl_run.py](app/spotdl_run.py):
+  в `sync <URL>` у треков плейлиста нет genres/disc_count, и spotdl ДО проверки «файл уже
+  есть» делал reinit (Song.from_url, ~3 запроса к Spotify) — для КАЖДОГО скачанного трека;
+  автосинк 52 плейлистов шёл ~сутки. Обёртка патчит `Downloader.search_and_download`:
+  если файл есть (та же проверка, что у spotdl) — genres=[], disc_count заполняются, reinit
+  нет. Только для `--overwrite skip`. Вывод spotdl в лог задачи/docker logs фильтрует
+  `jobs.SpotdlLogFilter` (без строк на каждый пропущенный трек, рамок трейсбеков rich и
+  сбоев поиска текстов; в конце плейлиста — строка `[итог]`), прогресс видит всё;
+  настройка `verbose_spotdl_log` выключает фильтр. Группы в `job_groups` — только пакетные
+  загрузки: повторные автосинки с одним заголовком раньше рисовались «пакетом 4/5».
+  Логи задач в памяти (cap 4000 строк) + дублируются в
   `docker logs`. UI статуса (плавающей панели задач больше нет):
   **строка статуса** вверху (`renderStatusStrip`: синки с прогрессом, загрузки,
   апгрейд, иначе «всё спокойно»), **карточки плейлистов** (живой статус из
@@ -260,6 +270,7 @@ app/zotify_login.py  OAuth-вход librespot (PKCE): ссылка, обмен c
 app/navidrome.py     пересканирование Navidrome после изменений (дебаунс + потолок частоты)
 app/gen_zotify_creds.py то же из консоли (запасной вариант)
 app/spotify_login.py OAuth-вход для Liked Songs: authorize-URL, обмен code (--exchange), CLI
+app/spotdl_run.py    обёртка запуска spotdl (через неё run_spotdl): скачанное — без дозапроса метаданных
 app/settings.py      реестр настроек UI (UI→env→дефолт), секреты-файлы, cookies
 app/upgrade.py       Step 2: массовый апгрейд (контроллер + воркер)
 app/static/          index.html, app.js, style.css (тёмная SPA)
