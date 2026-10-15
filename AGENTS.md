@@ -325,6 +325,10 @@ app/static/v2/       новый UI по design/prototype.html (на «/new», э
                      попавшее ни в один раздел, само уходит в «Прочее» — новая настройка в FIELDS
                      видна сразу. Особые разделы: Spotify (приложение + вход), YouTube Music (cookies),
                      Deezer, librespot (вход), Navidrome, доступ (смена пароля → новый токен), система.
+                     Прослушивание файла (дубли): <audio> не шлёт токен в заголовке, токен в URL не
+                     кладём → POST /api/v2/tracks/{id}/listen выдаёт подписанную ссылку на ОДИН файл
+                     на 15 мин (ключ — в памяти процесса), GET /api/v2/audio/{id}?exp&sig без входа,
+                     Range работает (перемотка), путь проверяется на нахождение внутри MUSIC_DIR.
 Dockerfile           самодостаточный образ (ffmpeg+spotdl+deno+git+app)
 .github/workflows/build.yml  CI → GHCR
 docker-compose.yml   стек для Portainer (image из GHCR), env с комментариями

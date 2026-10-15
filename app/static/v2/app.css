@@ -119,8 +119,14 @@ h2 { font-size: 19px; font-weight: 600; margin: 28px 0 10px; letter-spacing: -.0
 .back { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); cursor: pointer; margin-bottom: 12px; font-size: 14px; background: none; border: 0; padding: 0; }
 .hide-m { }
 .select { height: 28px; border-radius: 14px; border: 0; background: var(--fill); color: var(--text); font: inherit; font-size: 13px; padding: 0 10px; cursor: pointer; }
+.miss-slot { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; max-width: 100%; }
 .miss-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-.miss-hint { flex-basis: 100%; padding-left: 56px; margin-top: -2px; }
+.miss-hint { text-align: right; }
+.miss-hint.row { justify-content: flex-end; width: 100%; }
+.select option { background-color: var(--card); color: var(--text); }
+.pl-group { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: var(--card2); border-top: 1px solid var(--sep); font-size: 13px; font-weight: 600; }
+.pl-group:first-child { border-top: 0; }
+.player { width: 100%; margin-top: 8px; height: 36px; }
 
 /* --- телефон --- */
 @media (max-width: 860px) {
@@ -142,8 +148,10 @@ h2 { font-size: 19px; font-weight: 600; margin: 28px 0 10px; letter-spacing: -.0
   .dup { grid-template-columns: 1fr; }
   .dup .vs { justify-self: center; transform: rotate(90deg); }
   .list > .li { padding: 10px 14px; }
-  .miss-actions { flex-basis: 100%; justify-content: flex-start; padding-left: 0; }
-  .miss-hint { padding-left: 0; }
+  .miss-slot { flex-basis: 100%; align-items: stretch; }
+  .miss-actions { justify-content: flex-start; }
+  .miss-hint { text-align: left; }
+  .miss-hint.row { justify-content: flex-start; }
 }
 
 /* --- вход --- */

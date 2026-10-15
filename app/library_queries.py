@@ -216,6 +216,14 @@ def attention(conn) -> dict:
                  missing={"reason": t["m_reason"] or "other", "detail": t["m_detail"] or "", "source_url": t["m_url"]})
         d.pop("platforms", None)
         missing.append(d)
+    # все плейлисты каждого недокачанного трека (фильтр «Внимания» по плейлисту)
+    in_pl: Dict[int, List[dict]] = {}
+    for r in conn.execute("SELECT DISTINCT pi.track_id, p.id, p.name, p.position FROM playlist_items pi "
+                          "JOIN playlists p ON p.id = pi.playlist_id JOIN tracks t ON t.id = pi.track_id "
+                          "WHERE t.status = 'missing' ORDER BY p.position, p.id"):
+        in_pl.setdefault(r["track_id"], []).append({"id": r["id"], "name": r["name"]})
+    for d in missing:
+        d["playlists"] = in_pl.get(d["id"], [])
 
     cands = conn.execute(
         "SELECT * FROM match_candidates WHERE decision IS NULL ORDER BY level, score DESC, id").fetchall()

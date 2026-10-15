@@ -1,6 +1,7 @@
 """FastAPI-приложение: API для управления плейлистами, просмотра ненайденных
 треков и добивания. Аутентификация — токен в заголовке (Bearer / X-Auth-Token).
 Токен НИКОГДА не передаётся в URL/query."""
+import hashlib
 import hmac
 import json
 import os
@@ -391,6 +392,26 @@ class DupeDecisionIn(BaseModel):
     decision: str                   # same — одна запись; different — разные треки
 
 
+class DupesBulkIn(BaseModel):
+    levels: list[int]
+    decision: str
+
+
+@app.post("/api/v2/dupes/bulk", dependencies=[Depends(require_auth)])
+def api_v2_dupes_bulk(body: DupesBulkIn):
+    """Одно решение на все нерешённые пары указанных уровней (уверенные — 1–3)."""
+    from . import db
+    if body.decision not in ("same", "different"):
+        raise HTTPException(status_code=400, detail="Решение: same или different")
+    levels = [lv for lv in body.levels if lv in (1, 2, 3, 4)]
+    if not levels:
+        raise HTTPException(status_code=400, detail="Нужны уровни 1–4")
+    with db.connect() as conn:
+        cur = conn.execute(f"UPDATE match_candidates SET decision = ?, decided_at = ? WHERE decision IS NULL "
+                           f"AND level IN ({','.join('?' for _ in levels)})", (body.decision, time.time(), *levels))
+    return {"updated": cur.rowcount}
+
+
 @app.post("/api/v2/dupes/{cand_id}", dependencies=[Depends(require_auth)])
 def api_v2_dupe_decision(cand_id: int, body: DupeDecisionIn):
     """Решение по паре. «same» пока только запоминается: склеивать файлы безопасно,
@@ -434,6 +455,51 @@ def api_v2_quality():
             "configured": bool(config.zotify_configured()),
             "settings": {k: settings.get(k) for k in ("safe_mode", "upgrade_per_day", "upgrade_min_bitrate",
                                                       "bulk_wait_min", "bulk_wait_max")}}
+
+
+# ---- прослушивание файла из библиотеки (сравнить дубли на слух) ----
+# Плеер браузера (<audio src>) не умеет слать токен в заголовке, а токен в
+# адресе мы не держим. Поэтому — короткая подписанная ссылка на ОДИН файл:
+# ключ живёт только в памяти процесса, ссылка — 15 минут.
+_AUDIO_KEY = secrets.token_bytes(32)
+_AUDIO_TTL = 15 * 60
+_AUDIO_TYPES = {".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".mp4": "audio/mp4", ".flac": "audio/flac",
+                ".opus": "audio/ogg", ".ogg": "audio/ogg", ".oga": "audio/ogg", ".wav": "audio/wav",
+                ".aac": "audio/aac"}
+
+
+def _audio_sig(track_id: int, exp: int) -> str:
+    return hmac.new(_AUDIO_KEY, f"{track_id}:{exp}".encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def _track_file(track_id: int) -> str:
+    from . import db
+    with db.connect() as conn:
+        row = conn.execute("SELECT path FROM tracks WHERE id = ? AND status = 'ok'", (track_id,)).fetchone()
+    path = row["path"] if row else None
+    if not path or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Файла нет")
+    music = os.path.realpath(config.MUSIC_DIR)
+    if os.path.commonpath([os.path.realpath(path), music]) != music:
+        raise HTTPException(status_code=403, detail="Файл вне библиотеки")
+    return path
+
+
+@app.post("/api/v2/tracks/{track_id}/listen", dependencies=[Depends(require_auth)])
+def api_v2_track_listen(track_id: int):
+    _track_file(track_id)
+    exp = int(time.time()) + _AUDIO_TTL
+    return {"url": f"/api/v2/audio/{track_id}?exp={exp}&sig={_audio_sig(track_id, exp)}"}
+
+
+@app.get("/api/v2/audio/{track_id}")
+def api_v2_audio(track_id: int, exp: int = 0, sig: str = ""):
+    if exp < time.time() or not hmac.compare_digest(sig, _audio_sig(track_id, exp)):
+        raise HTTPException(status_code=403, detail="Ссылка устарела — нажмите «Слушать» ещё раз")
+    path = _track_file(track_id)
+    ext = os.path.splitext(path)[1].lower()
+    # Range поддерживается FileResponse — перемотка работает
+    return FileResponse(path, media_type=_AUDIO_TYPES.get(ext, "application/octet-stream"))
 
 
 class RescanIn(BaseModel):

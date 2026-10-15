@@ -1,7 +1,7 @@
 // Недокачанные треки: выбор источника на трек и на все сразу, своя ссылка
 // YouTube, свой файл, статус загрузки прямо в строке. Используется страницей
 // плейлиста и «Вниманием».
-import { api } from "./api.js";
+import { api, apiForm } from "./api.js";
 import { pokeSoon } from "./store.js";
 import { cover, esc, icon, on, toast } from "./ui.js";
 
@@ -65,7 +65,7 @@ function controls(t) {
     const val = urls.get(t.id) ?? (t.missing && t.missing.source_url) ?? "";
     const q = encodeURIComponent(`${t.artist} ${t.title}`);
     extra = `<div class="row miss-hint" style="gap:10px;flex-wrap:wrap">
-      <input class="field" data-yt="${t.id}" style="max-width:360px;height:30px;flex:1;min-width:180px" placeholder="https://music.youtube.com/watch?v=…" value="${esc(val)}">
+      <input class="field" data-yt="${t.id}" style="width:320px;max-width:100%;height:30px" placeholder="https://music.youtube.com/watch?v=…" value="${esc(val)}">
       <a class="tiny" href="https://music.youtube.com/search?q=${q}" target="_blank" rel="noopener">искать на YouTube ↗</a></div>`;
   } else if (pick === "file") {
     extra = `<div class="tiny muted miss-hint">свой mp3 / flac / m4a / opus — теги и обложка подтянутся со Spotify</div>`;
@@ -156,11 +156,7 @@ export function mountMissing(root, { getTracks, playlistId = null, bulkUrl = nul
     fd.append("file", inp.files[0]);
     if (playlistId) fd.append("playlist_id", playlistId);
     try {
-      const token = localStorage.getItem("spotdl_webui_token") || "";
-      const res = await fetch(`/api/v2/tracks/${t.id}/upload`, { method: "POST", body: fd,
-        headers: token ? { Authorization: "Bearer " + token } : {} });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || `Ошибка ${res.status}`);
+      const data = await apiForm(`/api/v2/tracks/${t.id}/upload`, fd);
       jobs.set(t.id, data.job.id);
       lastJobs.set(data.job.id, data.job);
       redraw(t);
@@ -172,10 +168,11 @@ export function mountMissing(root, { getTracks, playlistId = null, bulkUrl = nul
     if (rerenderBulk) rerenderBulk();
   });
   on(root, "click", "[data-bulk-go]", async (e, b) => {
-    if (!bulkUrl) return;
+    const url = typeof bulkUrl === "function" ? bulkUrl() : bulkUrl;   // может зависеть от выбранного плейлиста
+    if (!url) return;
     b.disabled = true;
     try {
-      const r = await api("POST", bulkUrl, { source: picks.get("bulk") || "auto" });
+      const r = await api("POST", url, { source: picks.get("bulk") || "auto" });
       // сервер отдаёт явное соответствие «трек → задача» (порядок строк тут ни при чём)
       Object.entries(r.jobs || {}).forEach(([tid, jid]) => jobs.set(Number(tid), jid));
       getTracks().filter((t) => jobs.has(t.id)).forEach(redraw);

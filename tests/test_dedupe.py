@@ -209,6 +209,35 @@ def test_library_list_filters():
         assert len(page["items"]) == 5 and page["total"] == 16
 
 
+def test_listen_links_and_bulk_dupes():
+    import time as _t
+    from fastapi.testclient import TestClient
+    from app import main
+    _build()
+    scanner.scan()
+    legacy_import.import_legacy()
+    dedupe.find_duplicates()
+    c = TestClient(main.app)
+    with db.connect() as conn:
+        tid = conn.execute("SELECT id FROM tracks WHERE status = 'ok' AND path LIKE '%.mp3' LIMIT 1").fetchone()[0]
+        missing_id = conn.execute("SELECT id FROM tracks WHERE status = 'missing' LIMIT 1").fetchone()[0]
+    url = c.post(f"/api/v2/tracks/{tid}/listen").json()["url"]
+    r = c.get(url, headers={"Range": "bytes=0-99"})
+    assert r.status_code == 206 and r.headers["content-type"] == "audio/mpeg", (r.status_code, r.headers)
+    assert c.get(url.replace("sig=", "sig=0")).status_code == 403                 # подделка
+    exp = int(_t.time()) - 5
+    assert c.get(f"/api/v2/audio/{tid}?exp={exp}&sig={main._audio_sig(tid, exp)}").status_code == 403   # просрочена
+    other = url.replace(f"/audio/{tid}?", f"/audio/{tid + 1}?")
+    assert c.get(other).status_code == 403                                      # подпись — только на свой файл
+    assert c.post(f"/api/v2/tracks/{missing_id}/listen").status_code == 404     # у «не скачан» файла нет
+
+    r = c.post("/api/v2/dupes/bulk", json={"levels": [1, 2, 3], "decision": "same"})
+    assert r.status_code == 200 and r.json()["updated"] == 3, r.json()
+    with db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM match_candidates WHERE decision IS NULL").fetchone()[0] == 0
+    assert c.post("/api/v2/dupes/bulk", json={"levels": [9], "decision": "same"}).status_code == 400
+
+
 def test_spotdl_silent_failure_is_not_success():
     from app import jobs
     silent = ["Processing query: a|b", "Error occurred while reinitializing song: 'uri'"]
