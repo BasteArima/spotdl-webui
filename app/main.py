@@ -406,6 +406,36 @@ def api_v2_dupe_decision(cand_id: int, body: DupeDecisionIn):
     return {"ok": True}
 
 
+def _overview(conn) -> dict:
+    from . import library_queries
+    return library_queries.library_overview(conn, settings.get("upgrade_min_bitrate"), set(upgrade.controller.upgraded))
+
+
+@app.get("/api/v2/library", dependencies=[Depends(require_auth)])
+def api_v2_library(view: str = "tracks", q: str = "", platform: str = "", offset: int = 0, limit: int = 100,
+                   album: Optional[str] = None, album_artist: Optional[str] = None, artist: Optional[str] = None):
+    from . import db, library_queries
+    if view not in ("tracks", "albums", "artists"):
+        raise HTTPException(status_code=400, detail="view: tracks, albums или artists")
+    with db.connect() as conn:
+        data = library_queries.library_list(conn, view, q, platform, max(0, offset), limit, album, album_artist, artist)
+        if offset == 0:
+            data["overview"] = _overview(conn)
+    return data
+
+
+@app.get("/api/v2/quality", dependencies=[Depends(require_auth)])
+def api_v2_quality():
+    """Раздел «Качество 320k»: ход апгрейда, сколько ещё можно улучшить, его настройки."""
+    from . import db
+    with db.connect() as conn:
+        overview = _overview(conn)
+    return {"status": upgrade.controller.status(), "overview": overview,
+            "configured": bool(config.zotify_configured()),
+            "settings": {k: settings.get(k) for k in ("safe_mode", "upgrade_per_day", "upgrade_min_bitrate",
+                                                      "bulk_wait_min", "bulk_wait_max")}}
+
+
 class RescanIn(BaseModel):
     full: bool = False
 

@@ -2,10 +2,22 @@
 // значки источников, форматирование. Разметка — строками (как в прототипе),
 // события — делегированием (on(root, "click", "[data-x]", fn)).
 
-export const ICONS = "/static/v2/icons.svg";
+// Спрайт иконок встраивается в страницу один раз (loadIcons): ссылка на внешний
+// файл в каждом <use> заставляла браузер перепроверять его при каждой перерисовке.
+export async function loadIcons() {
+  if (document.getElementById("icon-sprite")) return;
+  try {
+    const svg = await fetch("/static/v2/icons.svg").then((r) => r.text());
+    const box = document.createElement("div");
+    box.id = "icon-sprite";
+    box.hidden = true;
+    box.innerHTML = svg;
+    document.body.prepend(box);
+  } catch (e) { /* без иконок — интерфейс всё равно работает */ }
+}
 
 export function icon(name, cls = "") {
-  return `<svg class="i ${cls}" aria-hidden="true"><use href="${ICONS}#${name}"></use></svg>`;
+  return `<svg class="i ${cls}" aria-hidden="true"><use href="#${name}"></use></svg>`;
 }
 
 export function esc(s) {

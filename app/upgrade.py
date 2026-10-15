@@ -6,6 +6,7 @@
 НЕ качаются и прогресс переживает рестарт. Загрузки идут в real-time (скорость
 прослушивания, анти-бан), отдельным потоком, не блокируя UI.
 """
+import collections
 import glob
 import json
 import os
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+from typing import Optional
 
 from . import config, navidrome, playlists, settings
 
@@ -31,6 +33,8 @@ class _UpgradeController:
         self._worker = None
         self._result_q = None
         self.upgraded = self._load()
+        # последние результаты — для раздела «Качество 320k» (только в памяти)
+        self.recent = collections.deque(maxlen=20)
         self.stats = {
             "state": "idle",          # idle | running | stopping | stopped
             "total": 0, "done": 0, "failed": 0, "skipped": 0,
@@ -79,6 +83,7 @@ class _UpgradeController:
         with self._lock:
             s = dict(self.stats)
         s["upgraded_total"] = len(self.upgraded)
+        s["recent"] = list(self.recent)
         processed = s["done"] + s["failed"]
         if s["state"] == "running" and processed > 0 and s["started"]:
             elapsed = time.time() - s["started"]
@@ -124,8 +129,17 @@ class _UpgradeController:
                 break
             with self._lock:
                 self.stats["current"] = item["name"]
-            ok = self._download(url, item["name"])
+            res = self._download(url, item["name"])
+            if res is None and self._stop:
+                break                        # остановили посреди трека — это не сбой трека
+            ok = bool(res and (res.get("ok") or res.get("skipped")))
             with self._lock:
+                self.recent.appendleft({
+                    "name": item["name"], "ts": time.time(),
+                    # skipped — файл уже не ниже порога (upgrade_min_bitrate), качать не стали
+                    "result": "failed" if not ok else ("good" if res.get("skipped") else "upgraded"),
+                    "detail": str((res or {}).get("error") or "")[:200],
+                })
                 if ok:
                     navidrome.notify_changed()
                     self.upgraded.add(url)
@@ -213,9 +227,10 @@ class _UpgradeController:
         except Exception:  # noqa: BLE001
             pass
 
-    def _download(self, url: str, name: str) -> bool:
+    def _download(self, url: str, name: str) -> Optional[dict]:
+        """Ответ воркера по треку ({"ok"|"skipped"|"error"…}) или None при сбое."""
         if self._stop:
-            return False
+            return None
         try:
             w = self._ensure_worker()
             q = self._result_q
@@ -224,21 +239,21 @@ class _UpgradeController:
         except Exception as exc:  # noqa: BLE001 — воркер умер при записи
             print(f"[upgrade] воркер недоступен ({exc}) — перезапуск", flush=True)
             self._kill_worker()
-            return False
+            return None
         try:
             line = q.get(timeout=settings.get("upgrade_track_timeout"))
         except queue.Empty:
             print(f"[upgrade] TIMEOUT {name} — перезапуск воркера", flush=True)
             self._kill_worker()
-            return False
+            return None
         if line is None:                   # воркер завершился
             print(f"[upgrade] воркер завершился на {name} — перезапуск", flush=True)
             self._kill_worker()
-            return False
+            return None
         try:
             res = json.loads(line)
         except (ValueError, TypeError):
-            return False
+            return None
         return bool(res.get("ok") or res.get("skipped"))
 
 

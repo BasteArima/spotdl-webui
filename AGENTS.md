@@ -314,6 +314,11 @@ app/static/v2/       новый UI по design/prototype.html (на «/new», э
                      на ушедший в корзину файл. Источник «unavailable» ставит синк по ответу
                      Spotify «Playlist not available» (jobs._mark_source_availability); импорт
                      статус источника не трогает.
+                     views/library.js (GET /api/v2/library: поиск — своя SQL-функция ulower,
+                     т.к. LIKE в SQLite не знает регистра кириллицы; переход в альбом/исполнителя —
+                     точный фильтр album/album_artist/artist), views/quality.js (GET /api/v2/quality;
+                     апгрейд хранит последние 20 результатов в памяти — controller.recent).
+                     Иконки: спрайт встраивается в страницу при старте (ui.loadIcons), <use href="#имя">.
 Dockerfile           самодостаточный образ (ffmpeg+spotdl+deno+git+app)
 .github/workflows/build.yml  CI → GHCR
 docker-compose.yml   стек для Portainer (image из GHCR), env с комментариями

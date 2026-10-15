@@ -236,3 +236,87 @@ def attention(conn) -> dict:
         "SELECT p.id, p.name, ps.kind, ps.ref FROM playlist_sources ps JOIN playlists p ON p.id = ps.playlist_id "
         "WHERE ps.status = 'unavailable' ORDER BY p.position")]
     return {"missing": missing, "dupes": dupes, "dupes_pending_merge": decided_same, "unavailable": unavailable}
+
+
+# ------------------------------------------------------------------ библиотека
+def _ulower(conn) -> None:
+    # LIKE и lower() в SQLite понимают регистр только латиницы — для кириллицы своя функция
+    conn.create_function("ulower", 1, lambda s: (s or "").lower(), deterministic=True)
+
+
+_PLATFORM_SQL = {
+    "spotify": "EXISTS (SELECT 1 FROM playlist_items pi JOIN playlist_sources ps ON ps.id = pi.source_id "
+               "WHERE pi.track_id = t.id AND ps.kind LIKE 'spotify_%')",
+    "ytm": "EXISTS (SELECT 1 FROM playlist_items pi JOIN playlist_sources ps ON ps.id = pi.source_id "
+           "WHERE pi.track_id = t.id AND ps.kind LIKE 'ytm_%')",
+    "manual": "NOT EXISTS (SELECT 1 FROM playlist_items pi WHERE pi.track_id = t.id)",
+}
+
+
+def library_overview(conn, min_bitrate: int, upgraded_urls: set) -> dict:
+    one = lambda sql, *a: conn.execute(sql, a).fetchone()[0]  # noqa: E731
+    sp_ok = conn.execute(
+        "SELECT t.bitrate, i.value FROM tracks t JOIN track_ids i ON i.track_id = t.id AND i.kind = 'spotify' "
+        "WHERE t.status = 'ok'").fetchall()
+    below = [r for r in sp_ok if (r["bitrate"] or 0) < min_bitrate]
+    pending = [r for r in below if f"https://open.spotify.com/track/{r['value']}" not in upgraded_urls]
+    return {
+        "tracks": one("SELECT COUNT(*) FROM tracks WHERE status = 'ok'"),
+        "size": one("SELECT COALESCE(SUM(file_size), 0) FROM tracks WHERE status = 'ok'"),
+        "artists": one("SELECT COUNT(DISTINCT artist) FROM tracks WHERE status = 'ok' AND artist != ''"),
+        "albums": one("SELECT COUNT(*) FROM (SELECT 1 FROM tracks WHERE status = 'ok' AND album != '' "
+                      "GROUP BY album_artist, album)"),
+        "hi_quality": one("SELECT COUNT(*) FROM tracks WHERE status = 'ok' AND bitrate >= ?", min_bitrate),
+        "multi": one("SELECT COUNT(*) FROM (SELECT pi.track_id FROM playlist_items pi JOIN playlist_sources ps "
+                     "ON ps.id = pi.source_id GROUP BY pi.track_id HAVING COUNT(DISTINCT substr(ps.kind, 1, 3)) > 1)"),
+        "upgradeable": len(pending),
+        "below_threshold": len(below),
+        "with_spotify": len(sp_ok),
+        "min_bitrate": min_bitrate,
+    }
+
+
+def library_list(conn, view: str = "tracks", q: str = "", platform: str = "", offset: int = 0, limit: int = 100,
+                 album: Optional[str] = None, album_artist: Optional[str] = None, artist: Optional[str] = None) -> dict:
+    """Треки / альбомы / исполнители библиотеки с поиском и фильтром по площадке.
+    album (+album_artist) / artist — точный фильтр (переход из альбома/исполнителя)."""
+    _ulower(conn)
+    where, args = ["t.status = 'ok'"], []
+    if album is not None:
+        where.append("t.album = ?")
+        args.append(album)
+        if album_artist is not None:
+            where.append("t.album_artist = ?")
+            args.append(album_artist)
+    if artist is not None:
+        where.append("t.artist = ?")
+        args.append(artist)
+    if q.strip():
+        for word in q.lower().split():
+            where.append("ulower(t.title || ' ' || t.artist || ' ' || t.album || ' ' || t.album_artist) LIKE ?")
+            args.append(f"%{word}%")
+    if platform in _PLATFORM_SQL:
+        where.append(_PLATFORM_SQL[platform])
+    w = " AND ".join(where)
+    limit = max(1, min(int(limit), 500))
+    if view == "albums":
+        w += " AND t.album != ''"           # файлы без альбома — только во вкладке «Треки»
+        total = conn.execute(f"SELECT COUNT(*) FROM (SELECT 1 FROM tracks t WHERE {w} GROUP BY t.album_artist, t.album)",
+                             args).fetchone()[0]
+        rows = conn.execute(
+            f"SELECT t.album_artist, t.album, COUNT(*) AS n, MAX(t.year) AS year, "
+            f"ROUND(AVG(t.bitrate)) AS bitrate FROM tracks t WHERE {w} GROUP BY t.album_artist, t.album "
+            f"ORDER BY ulower(t.album_artist), ulower(t.album) LIMIT ? OFFSET ?", args + [limit, offset]).fetchall()
+        return {"total": total, "items": [dict(r) for r in rows]}
+    if view == "artists":
+        total = conn.execute(f"SELECT COUNT(DISTINCT t.artist) FROM tracks t WHERE {w}", args).fetchone()[0]
+        rows = conn.execute(
+            f"SELECT t.artist, COUNT(*) AS n, COUNT(DISTINCT t.album) AS albums FROM tracks t WHERE {w} "
+            f"GROUP BY t.artist ORDER BY ulower(t.artist) LIMIT ? OFFSET ?", args + [limit, offset]).fetchall()
+        return {"total": total, "items": [dict(r) for r in rows]}
+    total = conn.execute(f"SELECT COUNT(*) FROM tracks t WHERE {w}", args).fetchone()[0]
+    rows = conn.execute(
+        f"SELECT t.* FROM tracks t WHERE {w} ORDER BY ulower(t.artist), ulower(t.album), "
+        f"t.disc_number, t.track_number, ulower(t.title) LIMIT ? OFFSET ?", args + [limit, offset]).fetchall()
+    plats = track_platforms(conn, [r["id"] for r in rows])
+    return {"total": total, "items": [_track_row(r, plats) for r in rows]}

@@ -190,6 +190,25 @@ def test_attention_unavailable_and_decisions():
         assert library_queries.attention(conn)["unavailable"] == []
 
 
+def test_library_list_filters():
+    from app import library_queries
+    _build()
+    scanner.scan()
+    legacy_import.import_legacy()
+    with db.connect() as conn:
+        L = lambda **kw: library_queries.library_list(conn, **kw)  # noqa: E731
+        assert L()["total"] == 16
+        assert [t["title"] for t in L(q="ОХОТА")["items"]] == ["Охота на лисицу"]     # кириллица без регистра
+        assert L(q="hurt live")["total"] == 1                                          # все слова сразу
+        assert L(view="albums")["total"] == 14                                         # без «без альбома»
+        assert L(album="Dizzy up the Girl", album_artist="The Goo Goo Dolls")["total"] == 1   # точно, не по подстроке
+        assert L(artist="Johnny Cash")["total"] == 3
+        assert [t["title"] for t in L(platform="manual")["items"]] == ["Dustin O'Halloran - Opus 23"]
+        assert L(view="artists", q="goo")["items"][0]["artist"] == "The Goo Goo Dolls"
+        page = L(limit=5, offset=5)
+        assert len(page["items"]) == 5 and page["total"] == 16
+
+
 def test_spotdl_silent_failure_is_not_success():
     from app import jobs
     silent = ["Processing query: a|b", "Error occurred while reinitializing song: 'uri'"]

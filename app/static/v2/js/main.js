@@ -8,7 +8,7 @@
 
 import { authStatus, signIn, signOut } from "./api.js";
 import { describeNow, startPolling, state, stopPolling, subscribe } from "./store.js";
-import { bar, esc, fmtIn, icon, on, toast } from "./ui.js";
+import { bar, esc, fmtIn, icon, loadIcons, on, toast } from "./ui.js";
 
 const NAV = [
   { id: "home", title: "Главная", icon: "home" },
@@ -35,8 +35,8 @@ const VIEWS = {
   home: () => import("./views/home.js"),
   search: () => import("./views/stub.js"),
   playlists: () => import("./views/playlists.js"),
-  library: () => import("./views/stub.js"),
-  quality: () => import("./views/stub.js"),
+  library: () => import("./views/library.js"),
+  quality: () => import("./views/quality.js"),
   attention: () => import("./views/attention.js"),
   discover: () => import("./views/stub.js"),
   activity: () => import("./views/stub.js"),
@@ -200,4 +200,5 @@ subscribe((st) => {
   }
 });
 on(document.body, "click", "#logout", () => { signOut(); toast("Вы вышли"); });
+loadIcons();
 boot();
