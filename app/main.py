@@ -79,6 +79,23 @@ class PasswordChangeIn(BaseModel):
     new: str
 
 
+@app.middleware("http")
+async def _revalidate_ui(request: Request, call_next):
+    """Страницы и файлы интерфейса — с проверкой свежести (ETag) при каждом
+    открытии: после обновления образа браузер не держит старый JS-модуль."""
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith("/static/") or path in ("/", "/new"):
+        response.headers.setdefault("Cache-Control", "no-cache")
+    return response
+
+
+@app.get("/new")
+def index_new():
+    """Новый интерфейс (design/plan.md, этап 2) — рядом с прежним, пока не догонит его."""
+    return FileResponse(os.path.join(STATIC_DIR, "v2", "index.html"))
+
+
 @app.get("/api/auth/status")
 def api_auth_status(token: str = Depends(_request_token)):
     """Без авторизации: фронту нужно понять, что показывать (вход / первичная

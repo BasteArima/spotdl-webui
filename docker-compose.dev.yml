@@ -22,3 +22,6 @@ services:
     volumes:
       - ./_dev/conf:/conf
       - ./_dev/music:/music
+      # код — с диска: правки интерфейса видны без пересборки (Python — после
+      # `docker restart spotdl-webui-dev`)
+      - ./app:/app/app:ro

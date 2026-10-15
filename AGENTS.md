@@ -292,7 +292,14 @@ app/dedupe.py        проход по библиотеке после импо�
                      dedupe его не понижает.
 tests/make_dev_library.py  тестовая библиотека для стенда docker-compose.dev.yml (:4536, данные в _dev/).
 app/upgrade.py       Step 2: массовый апгрейд (контроллер + воркер)
-app/static/          index.html, app.js, style.css (тёмная SPA)
+app/static/          index.html, app.js, style.css — прежний UI (на «/»)
+app/static/v2/       новый UI по design/prototype.html (на «/new», этап 2 плана): index.html, app.css,
+                     icons.svg (спрайт Tabler — только используемые иконки: новая = скачать
+                     @tabler/icons из npm и дописать <symbol>), js/main.js (каркас, роутинг #/раздел,
+                     вход), js/api.js, js/store.js (опрос /api/jobs + /api/library), js/ui.js,
+                     js/views/*.js (render/mount/onState). Без сборщика — ES-модули. Ключи
+                     localStorage (токен, тема) общие с прежним UI. /static и страницы — Cache-Control:
+                     no-cache (ETag), чтобы после обновления не жил старый модуль.
 Dockerfile           самодостаточный образ (ffmpeg+spotdl+deno+git+app)
 .github/workflows/build.yml  CI → GHCR
 docker-compose.yml   стек для Portainer (image из GHCR), env с комментариями
