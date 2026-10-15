@@ -8,6 +8,7 @@ export const state = { jobs: null, library: null };
 const listeners = new Set();
 let timer = null;
 let lastActive = -1;
+let lastIndexDone = undefined;   // id последнего завершённого обновления индекса
 
 export function subscribe(fn) {
   listeners.add(fn);
@@ -33,8 +34,15 @@ async function tick() {
   if (document.hidden) return;              // вернёмся по visibilitychange
   try {
     state.jobs = await api("GET", "/api/jobs?limit=60");
-    // очередь только что затихла — пересчитать сводку библиотеки (новые файлы, «не скачано»)
-    if (lastActive > 0 && state.jobs.active === 0) refreshLibrary();
+    // индекс обновился (после синка, загрузки, правки плейлиста) — пересчитать
+    // сводку библиотеки; экраны, увидев новую сводку, перечитают свои данные.
+    // По завершённой задаче индекса, а не по «очередь затихла»: скан длится доли
+    // секунды и между опросами его можно не застать.
+    const idx = (state.jobs.jobs || []).find((j) => j.kind === "index" && (j.status === "done" || j.status === "error"));
+    const idxId = idx ? idx.id : null;
+    if (lastIndexDone !== undefined && idxId !== lastIndexDone) refreshLibrary();
+    else if (lastActive > 0 && state.jobs.active === 0) refreshLibrary();
+    lastIndexDone = idxId;
     lastActive = state.jobs.active;
     emit();
   } catch (e) {

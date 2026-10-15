@@ -4,7 +4,7 @@
 возвращают простые словари — их отдают /api/v2/* как есть.
 """
 import json
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 # вид источника плейлиста → площадка (для значков)
 PLATFORM = {"spotify_playlist": "spotify", "spotify_album": "spotify", "spotify_artist": "spotify",
@@ -86,3 +86,101 @@ def home(conn) -> dict:
                       "dupes": sum(dupes.values()), "dupes_by_level": dupes, "unavailable": unavailable},
         "recent": [_track_row(r, plats) for r in rows],
     }
+
+
+# ------------------------------------------------------------------ плейлисты
+_SOURCE_LABEL = {"spotify_playlist": "плейлист Spotify", "spotify_album": "альбом Spotify",
+                 "spotify_artist": "исполнитель Spotify", "spotify_track": "трек Spotify",
+                 "spotify_liked": "Любимые Spotify", "ytm_playlist": "плейлист YouTube Music",
+                 "ytm_liked": "Понравившиеся YouTube Music"}
+
+
+def _sources(conn, playlist_ids: List[int]) -> Dict[int, List[dict]]:
+    out: Dict[int, List[dict]] = {p: [] for p in playlist_ids}
+    if not playlist_ids:
+        return out
+    marks = ",".join("?" for _ in playlist_ids)
+    for r in conn.execute(f"SELECT * FROM playlist_sources WHERE playlist_id IN ({marks}) ORDER BY id", playlist_ids):
+        try:
+            last = json.loads(r["last_result"]) if r["last_result"] else None
+        except ValueError:
+            last = None
+        out[r["playlist_id"]].append({
+            "id": r["id"], "kind": r["kind"], "ref": r["ref"], "label": r["label"] or _SOURCE_LABEL.get(r["kind"], r["kind"]),
+            "platform": PLATFORM.get(r["kind"], "manual"), "status": r["status"], "last": last})
+    return out
+
+
+def _counts(conn, playlist_ids: List[int]) -> Dict[int, dict]:
+    out = {p: {"total": 0, "have": 0, "missing": 0, "multi": 0} for p in playlist_ids}
+    if not playlist_ids:
+        return out
+    marks = ",".join("?" for _ in playlist_ids)
+    for r in conn.execute(
+            f"SELECT pi.playlist_id AS pid, COUNT(DISTINCT pi.track_id) AS total, "
+            f"COUNT(DISTINCT CASE WHEN t.status = 'ok' THEN pi.track_id END) AS have "
+            f"FROM playlist_items pi JOIN tracks t ON t.id = pi.track_id WHERE pi.playlist_id IN ({marks}) "
+            f"GROUP BY pi.playlist_id", playlist_ids):
+        out[r["pid"]].update(total=r["total"], have=r["have"], missing=r["total"] - r["have"])
+    # треки, пришедшие сразу из нескольких источников плейлиста (один файл на всех)
+    for r in conn.execute(
+            f"SELECT playlist_id AS pid, COUNT(*) AS n FROM (SELECT playlist_id, track_id FROM playlist_items "
+            f"WHERE playlist_id IN ({marks}) GROUP BY playlist_id, track_id HAVING COUNT(DISTINCT source_id) > 1) "
+            f"GROUP BY playlist_id", playlist_ids):
+        out[r["pid"]]["multi"] = r["n"]
+    return out
+
+
+def playlists(conn) -> List[dict]:
+    rows = conn.execute("SELECT * FROM playlists ORDER BY position, id").fetchall()
+    ids = [r["id"] for r in rows]
+    srcs, counts = _sources(conn, ids), _counts(conn, ids)
+    return [{"id": r["id"], "name": r["name"], "legacy_id": r["legacy_id"], "auto_sync": bool(r["auto_sync"]),
+             "sources": srcs[r["id"]], **counts[r["id"]]} for r in rows]
+
+
+def playlist(conn, playlist_id: int) -> Optional[dict]:
+    r = conn.execute("SELECT * FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
+    if not r:
+        return None
+    srcs, counts = _sources(conn, [playlist_id]), _counts(conn, [playlist_id])
+    source_kind = {s["id"]: s["kind"] for s in srcs[playlist_id]}
+    rows = conn.execute(
+        "SELECT t.*, MIN(pi.position) AS pos, GROUP_CONCAT(DISTINCT pi.source_id) AS src_ids, "
+        "m.reason AS m_reason, m.detail AS m_detail, m.source_url AS m_url, "
+        "(SELECT value FROM track_ids WHERE track_id = t.id AND kind = 'spotify') AS spotify_id "
+        "FROM playlist_items pi JOIN tracks t ON t.id = pi.track_id LEFT JOIN missing m ON m.track_id = t.id "
+        "WHERE pi.playlist_id = ? GROUP BY t.id ORDER BY pos, t.id", (playlist_id,)).fetchall()
+    tracks = []
+    for t in rows:
+        sids = [int(x) for x in (t["src_ids"] or "").split(",") if x]
+        plats = sorted({PLATFORM.get(source_kind.get(s, ""), "manual") for s in sids} or {"manual"},
+                       key=["spotify", "ytm", "manual"].index)
+        d = _track_row(t, {t["id"]: plats})
+        d["spotify_url"] = f"https://open.spotify.com/track/{t['spotify_id']}" if t["spotify_id"] else None
+        d["isrc"] = t["isrc"]
+        if t["status"] == "missing":
+            d["missing"] = {"reason": t["m_reason"] or "other", "detail": t["m_detail"] or "",
+                            "source_url": t["m_url"]}
+        tracks.append(d)
+    return {"id": r["id"], "name": r["name"], "legacy_id": r["legacy_id"], "auto_sync": bool(r["auto_sync"]),
+            "sources": srcs[playlist_id], **counts[playlist_id], "tracks": tracks}
+
+
+def track_for_fetch(conn, track_id: int, playlist_id: Optional[int] = None) -> Optional[dict]:
+    """Что нужно загрузчикам: ссылка Spotify, подпись, имя плейлиста (его m3u и
+    errors-файл), найденная ссылка YouTube."""
+    t = conn.execute("SELECT t.*, (SELECT value FROM track_ids WHERE track_id = t.id AND kind = 'spotify') AS sp, "
+                     "m.source_url AS yt FROM tracks t LEFT JOIN missing m ON m.track_id = t.id WHERE t.id = ?",
+                     (track_id,)).fetchone()
+    if not t:
+        return None
+    if playlist_id:
+        pl = conn.execute("SELECT name FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
+    else:
+        pl = conn.execute("SELECT p.name FROM playlist_items pi JOIN playlists p ON p.id = pi.playlist_id "
+                          "WHERE pi.track_id = ? ORDER BY p.position LIMIT 1", (track_id,)).fetchone()
+    return {"id": t["id"], "status": t["status"], "isrc": t["isrc"],
+            "spotify_url": f"https://open.spotify.com/track/{t['sp']}" if t["sp"] else None,
+            "subject": f"{t['artist']} - {t['title']}" if t["artist"] else t["title"],
+            "playlist": pl["name"] if pl else "", "youtube_url": t["yt"]}

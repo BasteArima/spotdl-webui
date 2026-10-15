@@ -218,6 +218,9 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
   оборвался (rc≠0, новый файл не записан), прежний возвращается (`_finish_errors_file`).
   Убийство сигналом (rc<0, не таймаут/отмена) пишется в лог с подсказкой про mem_limit:
   OOM в cgroup убивает spotdl, а не контейнер (`OOMKilled` = false).
+- spotdl `download` возвращает 0 и при молчаливом провале («Error occurred while reinitializing
+  song») — успех загрузки только по явному отчёту (jobs.looks_downloaded: «Downloaded "…"»,
+  «: Done», «file already exists»), иначе трек выпадал из ненайденных без файла.
 - m3u пути на Linux **абсолютные** (`/music/...`); на Windows `Path` ведёт себя иначе —
   локальные тесты путей вводят в заблуждение.
 - spotdl sync пишет в m3u ВЕСЬ список плейлиста (не только скачанное) → добитый трек
@@ -300,6 +303,11 @@ app/static/v2/       новый UI по design/prototype.html (на «/new», э
                      js/views/*.js (render/mount/onState). Без сборщика — ES-модули. Ключи
                      localStorage (токен, тема) общие с прежним UI. /static и страницы — Cache-Control:
                      no-cache (ETag), чтобы после обновления не жил старый модуль.
+                     js/missing.js — недокачанные: источник на трек (Авто/Deezer/Spotify/ссылка YT/файл)
+                     и на все; API /api/v2/tracks/{id}/fetch|upload, /api/v2/playlists/{id}/fetch-missing.
+                     «Авто» = jobs.enqueue_auto: Deezer по ISRC → Spotify напрямую. Экраны перечитывают
+                     данные, когда store видит новое завершённое обновление индекса (а не «очередь
+                     затихла» — скан короче интервала опроса).
 Dockerfile           самодостаточный образ (ffmpeg+spotdl+deno+git+app)
 .github/workflows/build.yml  CI → GHCR
 docker-compose.yml   стек для Portainer (image из GHCR), env с комментариями

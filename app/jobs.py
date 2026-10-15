@@ -75,6 +75,7 @@ _LANE_BY_KIND = {
     "sync-all": LANE_BACKGROUND,     # «Синхронизировать всё» (тяжёлая)
     "autosync": LANE_BACKGROUND,     # плановый автосинк
     "index": LANE_BACKGROUND,        # скан /music → индекс библиотеки (app/scanner.py)
+    "fetch": LANE_INTERACTIVE,       # «Авто»: Deezer по ISRC → Spotify напрямую
 }
 
 
@@ -477,7 +478,18 @@ _FAIL_MARKERS = (
     "Some YouTube downloads require Deno",
     "DownloadError",
     "No results found",
+    "Error occurred while reinitializing song",
 )
+
+# Признаки, что spotdl ДЕЙСТВИТЕЛЬНО положил файл (или он уже был). spotdl
+# возвращает код 0 и при молчаливом провале (например, «Error occurred while
+# reinitializing song»), поэтому успех — только по явному отчёту, а не по
+# отсутствию ошибок: иначе трек убирался из ненайденных без файла.
+_OK_MARKERS = ('Downloaded "', "(file already exists)", ": Done")
+
+
+def looks_downloaded(lines: List[str]) -> bool:
+    return any(any(m in ln for m in _OK_MARKERS) for ln in lines)
 
 
 def looks_failed(lines: List[str]) -> bool:
@@ -1035,7 +1047,7 @@ def _download_track(job: Job, spotify_url: str, youtube_url: str, safe: str) -> 
     полного spotdl sync всего плейлиста). Возвращает True при успехе."""
     rc, out = run_spotdl(job, download_match_args(youtube_url, spotify_url),
                          timeout=settings.get("download_track_timeout"))
-    if rc != 0 or looks_failed(out):
+    if rc != 0 or looks_failed(out) or not looks_downloaded(out):
         job.status = "error"
         job.append("[error] загрузка не удалась — трек оставлен в списке ненайденных")
         return False
@@ -1218,24 +1230,54 @@ def _has_pending_sync_all() -> bool:
     return False
 
 
-def enqueue_download_one(spotify_url: str, youtube_url: str, safe: str) -> Job:
+def enqueue_download_one(spotify_url: str, youtube_url: str, safe: str, subject: str = "") -> Job:
     job = Job("download", f"Скачивание трека ({safe})",
               lambda j: _run_download_one(j, spotify_url, youtube_url, safe), name=safe)
-    job.subject = track_label(safe, spotify_url)
+    job.subject = subject or track_label(safe, spotify_url)
     return _enqueue(job)
 
 
-def enqueue_deezer(spotify_url: str, safe: str) -> Job:
+def enqueue_deezer(spotify_url: str, safe: str, subject: str = "") -> Job:
     job = Job("deezer", f"Deezer: {safe}",
               lambda j: _run_deezer(j, spotify_url, safe), name=safe)
-    job.subject = track_label(safe, spotify_url)
+    job.subject = subject or track_label(safe, spotify_url)
     return _enqueue(job)
 
 
-def enqueue_zotify(spotify_url: str, safe: str, force_realtime: bool = False) -> Job:
+def enqueue_zotify(spotify_url: str, safe: str, force_realtime: bool = False, subject: str = "") -> Job:
     job = Job("zotify", f"Spotify 320k: {safe}",
               lambda j: _run_zotify(j, spotify_url, safe, force_realtime), name=safe)
-    job.subject = track_label(safe, spotify_url)
+    job.subject = subject or track_label(safe, spotify_url)
+    return _enqueue(job)
+
+
+def _run_auto(job: Job, spotify_url: str, safe: str, bulk: bool) -> None:
+    """«Авто» для трека, которого нет на YouTube: Deezer по ISRC (быстро, точное
+    совпадение), не вышло — Spotify напрямую (медленно, со скоростью
+    прослушивания). Источник без настроек пропускается."""
+    tried = []
+    if config.deezer_arl():
+        _run_deezer(job, spotify_url, safe)
+        if job.status != "error":
+            return
+        tried.append("Deezer")
+        job.status = "running"          # следующая попытка — задача ещё идёт
+    if job.cancelled:
+        return
+    if config.zotify_configured():
+        if tried:
+            job.append("[auto] на Deezer не вышло — пробую Spotify напрямую")
+        _run_zotify(job, spotify_url, safe, force_realtime=bulk)
+        return
+    job.status = "error"
+    job.append("[error] " + ("Deezer не дал результата, а Spotify напрямую не настроен" if tried
+                             else "нет ни Deezer, ни Spotify напрямую — настройте один из них"))
+
+
+def enqueue_auto(spotify_url: str, safe: str, bulk: bool = False, subject: str = "") -> Job:
+    # заголовок как у Deezer-загрузок: пакет одного плейлиста собирается в одну группу
+    job = Job("fetch", f"Добивание: {safe}", lambda j: _run_auto(j, spotify_url, safe, bulk), name=safe)
+    job.subject = subject or track_label(safe, spotify_url)
     return _enqueue(job)
 
 
@@ -1504,7 +1546,8 @@ def _worker(lane: str) -> None:
             job.finished = time.time()
             if job.status == "done" and job.kind != "index":
                 navidrome.notify_changed()   # скан — позже, когда очередь затихнет
-            if job.status == "done" and job.kind in ("sync", "sync-all", "autosync"):
+            if job.status == "done" and job.kind in ("sync", "sync-all", "autosync", "download",
+                                                      "deezer", "zotify", "upload", "fetch"):
                 try:
                     enqueue_index()          # новые файлы — в индекс библиотеки
                 except Exception as exc:  # noqa: BLE001 — индекс не должен ронять воркер

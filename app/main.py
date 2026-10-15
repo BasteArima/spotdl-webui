@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from . import (auth, config, errors_parser, health, jobs, navidrome, playlists, settings,
                spotify_login, upgrade, zotify_login)
+from .naming import safe_name
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 # корень проекта для `python -m app.…` (в контейнере это /app)
@@ -211,6 +212,7 @@ def api_add_playlist(body: PlaylistIn):
         p = playlists.add_playlist(body.name, body.url)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    jobs.enqueue_index()        # новый плейлист — в индекс (импорт из playlists.txt)
     return {"playlist": p.to_dict()}
 
 
@@ -220,6 +222,7 @@ def api_edit_playlist(body: PlaylistEdit):
         p = playlists.update_playlist(body.old_url, body.name, body.url)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    jobs.enqueue_index()
     return {"playlist": p.to_dict()}
 
 
@@ -227,6 +230,7 @@ def api_edit_playlist(body: PlaylistEdit):
 def api_delete_playlist(body: PlaylistRef):
     if not playlists.delete_playlist(body.url):
         raise HTTPException(status_code=404, detail="Запись не найдена")
+    jobs.enqueue_index()
     return {"ok": True}
 
 
@@ -263,6 +267,97 @@ def api_v2_home():
     nd = navidrome.status()
     data["navidrome"] = {"configured": nd["configured"], "last": nd["last_result"]}
     return data
+
+
+@app.get("/api/v2/playlists", dependencies=[Depends(require_auth)])
+def api_v2_playlists():
+    from . import db, library_queries
+    with db.connect() as conn:
+        pls = library_queries.playlists(conn)
+    stats = jobs.playlist_stats()
+    for p in pls:
+        p["last_sync"] = stats.get(p["legacy_id"]) if p["legacy_id"] else None
+    return {"playlists": pls}
+
+
+def _fetch_caps() -> dict:
+    """Какие источники недостающего доступны (для выбора в UI)."""
+    return {"deezer": bool(config.deezer_arl()), "spotify": bool(config.zotify_configured())}
+
+
+@app.get("/api/v2/playlists/{playlist_id}", dependencies=[Depends(require_auth)])
+def api_v2_playlist(playlist_id: int):
+    from . import db, library_queries
+    with db.connect() as conn:
+        pl = library_queries.playlist(conn, playlist_id)
+    if not pl:
+        raise HTTPException(status_code=404, detail="Плейлист не найден")
+    pl["last_sync"] = jobs.playlist_stats().get(pl["legacy_id"]) if pl["legacy_id"] else None
+    pl["caps"] = _fetch_caps()
+    return pl
+
+
+class FetchIn(BaseModel):
+    source: str = "auto"            # auto | deezer | spotify | youtube
+    url: str = ""                   # для youtube — ссылка на ролик
+    playlist_id: Optional[int] = None
+    bulk: bool = False              # массовая: Spotify — со скоростью прослушивания и паузами
+
+
+def _enqueue_fetch(t: dict, source: str, url: str = "", bulk: bool = False):
+    """Поставить загрузку недостающего трека выбранным источником."""
+    sp, safe, subject = t["spotify_url"], safe_name(t["playlist"] or "Без плейлиста"), t["subject"]
+    if not sp:
+        raise HTTPException(status_code=400, detail="У трека нет ссылки Spotify — пока его можно только залить файлом")
+    caps = _fetch_caps()
+    if source == "youtube":
+        if not _YT_URL_RE.search(url or ""):
+            raise HTTPException(status_code=400, detail="Нужна ссылка на ролик YouTube / YouTube Music")
+        return jobs.enqueue_download_one(sp, url.strip(), safe, subject=subject)
+    if source == "deezer":
+        if not caps["deezer"]:
+            raise HTTPException(status_code=400, detail="Deezer не настроен — нужен ARL-токен")
+        return jobs.enqueue_deezer(sp, safe, subject=subject)
+    if source == "spotify":
+        if not caps["spotify"]:
+            raise HTTPException(status_code=400, detail="Spotify напрямую не настроен — войдите в настройках")
+        return jobs.enqueue_zotify(sp, safe, force_realtime=bulk, subject=subject)
+    if source == "auto":
+        if not caps["deezer"] and not caps["spotify"]:
+            raise HTTPException(status_code=400, detail="Нет источников: настройте Deezer или Spotify напрямую")
+        return jobs.enqueue_auto(sp, safe, bulk=bulk, subject=subject)
+    raise HTTPException(status_code=400, detail="Неизвестный источник")
+
+
+@app.post("/api/v2/tracks/{track_id}/fetch", dependencies=[Depends(require_auth)])
+def api_v2_track_fetch(track_id: int, body: FetchIn):
+    from . import db, library_queries
+    with db.connect() as conn:
+        t = library_queries.track_for_fetch(conn, track_id, body.playlist_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="Трек не найден")
+    job = _enqueue_fetch(t, body.source, body.url, body.bulk)
+    return {"job": job.to_dict()}
+
+
+@app.post("/api/v2/playlists/{playlist_id}/fetch-missing", dependencies=[Depends(require_auth)])
+def api_v2_playlist_fetch_missing(playlist_id: int, body: FetchIn):
+    """Все недостающие треки плейлиста — выбранным источником (auto/deezer/spotify)."""
+    from . import db, library_queries
+    if body.source not in ("auto", "deezer", "spotify"):
+        raise HTTPException(status_code=400, detail="Для всех сразу — Авто, Deezer или Spotify")
+    with db.connect() as conn:
+        ids = [r[0] for r in conn.execute(
+            "SELECT DISTINCT t.id FROM playlist_items pi JOIN tracks t ON t.id = pi.track_id "
+            "WHERE pi.playlist_id = ? AND t.status = 'missing'", (playlist_id,))]
+        items = [library_queries.track_for_fetch(conn, i, playlist_id) for i in ids]
+    jobs_out, skipped = [], 0
+    for t in items:
+        if not t or not t["spotify_url"]:
+            skipped += 1
+            continue
+        jobs_out.append(_enqueue_fetch(t, body.source, bulk=True).id)
+    return {"queued": len(jobs_out), "skipped": skipped, "job_ids": jobs_out}
 
 
 class RescanIn(BaseModel):
@@ -342,6 +437,7 @@ def api_download_batch(body: DownloadBatchIn):
 
 
 _SPOTIFY_TRACK_RE = re.compile(r"open\.spotify\.com/track/", re.IGNORECASE)
+_YT_URL_RE = re.compile(r"^https?://(?:www\.|music\.|m\.)?(?:youtube\.com/(?:watch\?|shorts/)|youtu\.be/)", re.IGNORECASE)
 
 
 class DeezerIn(BaseModel):
@@ -397,6 +493,14 @@ async def api_upload(
     if not file.filename:
         raise HTTPException(status_code=400, detail="Файл не передан")
 
+    tmp_path = await _save_upload_tmp(file)
+    # sync на обновление m3u ставит сама задача — только при успехе, без дублей
+    job = jobs.enqueue_upload(tmp_path, spotify_url, safe, file.filename)
+    return {"job": job.to_dict(), "filename": file.filename}
+
+
+async def _save_upload_tmp(file: UploadFile) -> str:
+    """Принятый файл — во временную папку (задача заливки удалит его сама)."""
     os.makedirs(config.UPLOADS_DIR, exist_ok=True)
     ext = os.path.splitext(file.filename)[1][:10] or ".audio"
     tmp_path = os.path.join(config.UPLOADS_DIR, f"{uuid.uuid4().hex}{ext}")
@@ -405,10 +509,25 @@ async def api_upload(
             shutil.copyfileobj(file.file, out, length=1024 * 1024)
     finally:
         await file.close()
+    return tmp_path
 
-    # sync на обновление m3u ставит сама задача — только при успехе, без дублей
-    job = jobs.enqueue_upload(tmp_path, spotify_url, safe, file.filename)
-    return {"job": job.to_dict(), "filename": file.filename}
+
+@app.post("/api/v2/tracks/{track_id}/upload", dependencies=[Depends(require_auth)])
+async def api_v2_track_upload(track_id: int, file: UploadFile = File(...), playlist_id: Optional[int] = Form(None)):
+    """Свой файл для недостающего трека из индекса: теги и обложка — со Spotify."""
+    from . import db, library_queries
+    with db.connect() as conn:
+        t = library_queries.track_for_fetch(conn, track_id, playlist_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="Трек не найден")
+    if not t["spotify_url"]:
+        raise HTTPException(status_code=400, detail="У трека нет ссылки Spotify — метаданные взять неоткуда")
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Файл не передан")
+    tmp_path = await _save_upload_tmp(file)
+    job = jobs.enqueue_upload(tmp_path, t["spotify_url"], safe_name(t["playlist"] or "Без плейлиста"), file.filename)
+    job.subject = t["subject"]
+    return {"job": job.to_dict()}
 
 
 @app.get("/api/jobs", dependencies=[Depends(require_auth)])

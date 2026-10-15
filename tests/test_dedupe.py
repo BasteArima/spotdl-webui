@@ -19,6 +19,8 @@ os.environ["CONF_DIR"] = os.path.join(_ROOT, "conf")
 os.environ["PLAYLISTS_M3U_DIR"] = os.path.join(_ROOT, "music", "playlists")
 os.environ["ERRORS_DIR"] = os.path.join(_ROOT, "conf", "errors")
 os.environ["PLAYLISTS_FILE"] = os.path.join(_ROOT, "conf", "playlists.txt")
+os.environ["AUTH_ENABLED"] = "false"          # API-тесты без входа
+os.environ["AUTOSYNC_INTERVAL_HOURS"] = "0"
 
 from app import db, dedupe, legacy_import, scanner  # noqa: E402
 from app.naming import playlist_id  # noqa: E402
@@ -108,6 +110,56 @@ def test_home_summary():
     a = h["attention"]
     assert a["missing"] == 3 and a["dupes"] == 3 and a["dupes_by_level"] == {1: 2, 3: 1}, a
     assert len(h["recent"]) == 6 and all(t["platforms"] for t in h["recent"]), h["recent"]
+
+
+def test_playlist_queries_and_fetch_api():
+    from fastapi.testclient import TestClient
+    from app import jobs, library_queries, main
+    _build()
+    scanner.scan()
+    legacy_import.import_legacy()
+    dedupe.find_duplicates()
+    with db.connect() as conn:
+        pls = {p["name"]: p for p in library_queries.playlists(conn)}
+        liked = library_queries.playlist(conn, pls["Любимые"]["id"])
+    assert set(pls) == {"Любимые", "Для работы", "Arcane", "Каверы"}, set(pls)
+    assert pls["Любимые"]["total"] == 9 and pls["Любимые"]["missing"] == 2, pls["Любимые"]
+    assert pls["Любимые"]["sources"][0]["kind"] == "spotify_liked"
+    titles = [t["title"] for t in liked["tracks"]]
+    assert titles[0] == "Hurt" and len(titles) == 9, titles                   # порядок как в Spotify
+    seven = next(t for t in liked["tracks"] if t["title"].startswith("Seven"))
+    assert seven["status"] == "missing" and seven["missing"]["reason"] == "not_found" and seven["spotify_url"]
+
+    enqueued = []
+    orig = (jobs.enqueue_download_one, jobs.enqueue_auto)
+    jobs.enqueue_download_one = lambda *a, **k: enqueued.append(("yt", a)) or jobs.Job("download", "t", lambda j: None)
+    jobs.enqueue_auto = lambda *a, **k: enqueued.append(("auto", a)) or jobs.Job("fetch", "t", lambda j: None)
+    try:
+        c = TestClient(main.app)
+        url = f"/api/v2/tracks/{seven['id']}/fetch"
+        r = c.post(url, json={"source": "youtube", "url": "not a link"})
+        assert r.status_code == 400 and "YouTube" in r.json()["detail"], r.json()
+        r = c.post(url, json={"source": "deezer"})
+        assert r.status_code == 400 and "Deezer" in r.json()["detail"], r.json()   # ARL не настроен
+        r = c.post(url, json={"source": "auto"})
+        assert r.status_code == 400 and "Нет источников" in r.json()["detail"], r.json()
+        r = c.post(url, json={"source": "youtube", "url": "https://music.youtube.com/watch?v=QU9c0053UAU",
+                              "playlist_id": pls["Любимые"]["id"]})
+        assert r.status_code == 200, r.json()
+        kind, args = enqueued[-1]
+        assert kind == "yt" and args[0] == seven["spotify_url"] and args[2] == "Любимые", args
+        assert c.get("/api/v2/playlists/999999").status_code == 404
+    finally:
+        jobs.enqueue_download_one, jobs.enqueue_auto = orig
+
+
+def test_spotdl_silent_failure_is_not_success():
+    from app import jobs
+    silent = ["Processing query: a|b", "Error occurred while reinitializing song: 'uri'"]
+    ok = ["A - B: Done", 'Downloaded "A - B": https://music.youtube.com/watch?v=x']
+    assert jobs.looks_failed(silent) or not jobs.looks_downloaded(silent)
+    assert not jobs.looks_failed(ok) and jobs.looks_downloaded(ok)
+    assert jobs.looks_downloaded(["Skipping A - B (file already exists) "])
 
 
 def test_cli_prints_dupes_line():
