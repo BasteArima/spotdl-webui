@@ -93,6 +93,23 @@ def test_rerun_is_stable_and_keeps_decisions():
         assert conn.execute("SELECT COUNT(*) FROM tracks WHERE title = 'Little Dark Age (Official Video)'").fetchone()[0] == 0
 
 
+def test_home_summary():
+    from app import library_queries
+    _build()
+    scanner.scan()
+    legacy_import.import_legacy()
+    dedupe.find_duplicates()
+    with db.connect() as conn:
+        h = library_queries.home(conn)
+    assert h["library"]["files"] == 16 and h["library"]["playlists"] == 4, h["library"]
+    assert h["sources"]["spotify"]["playlists"] == 3, h["sources"]
+    assert h["sources"]["spotify"]["liked"]["total"] == 9, h["sources"]      # 10 в save-файле, MGMT связан
+    assert h["sources"]["manual"]["tracks"] == 1, h["sources"]               # Opus 23 вне плейлистов
+    a = h["attention"]
+    assert a["missing"] == 3 and a["dupes"] == 3 and a["dupes_by_level"] == {1: 2, 3: 1}, a
+    assert len(h["recent"]) == 6 and all(t["platforms"] for t in h["recent"]), h["recent"]
+
+
 def test_cli_prints_dupes_line():
     _build()
     env = dict(os.environ, PYTHONIOENCODING="utf-8")

@@ -32,7 +32,7 @@ const TABS = [
 const MORE = ["library", "quality", "discover", "activity", "settings", "more"];
 
 const VIEWS = {
-  home: () => import("./views/stub.js"),
+  home: () => import("./views/home.js"),
   search: () => import("./views/stub.js"),
   playlists: () => import("./views/stub.js"),
   library: () => import("./views/stub.js"),

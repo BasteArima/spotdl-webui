@@ -248,6 +248,23 @@ def api_library():
     return {"stats": stats, "last_scan": scanner.last_scan(), **meta}
 
 
+@app.get("/api/v2/home", dependencies=[Depends(require_auth)])
+def api_v2_home():
+    """Главная нового интерфейса одним запросом: библиотека, источники, что
+    требует решения, недавнее, предупреждения окружения, Navidrome."""
+    from . import db, library_queries
+    with db.connect() as conn:
+        data = library_queries.home(conn)
+    env = health.environment_status()
+    sp = settings.spotify_app_status()
+    data["env"] = {"warnings": env.get("warnings", []), "cookies": env.get("cookies_present"),
+                   "spotify_login": sp.get("logged_in"), "spotify_user": sp.get("user"),
+                   "deezer": env.get("deezer_configured"), "librespot": env.get("zotify_configured")}
+    nd = navidrome.status()
+    data["navidrome"] = {"configured": nd["configured"], "last": nd["last_result"]}
+    return data
+
+
 class RescanIn(BaseModel):
     full: bool = False
 
