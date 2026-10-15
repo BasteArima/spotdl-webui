@@ -14,7 +14,12 @@
 
 ## Архитектура
 
-- **FastAPI + ванильный JS** (без фреймворков), один контейнер. UI — SPA в `app/static/`.
+- **FastAPI + ванильный JS** (без фреймворков и сборщика), один контейнер. UI — SPA на
+  ES-модулях в `app/static/v2/` на `/`; прежний интерфейс (`app/static/index.html`, `app.js`)
+  оставлен на `/legacy`.
+- **Индекс библиотеки** — SQLite `/conf/library.db`: файлы, внешние ID, плейлисты и их
+  источники, недокачанное, кандидаты в дубли. Задача «index» (сканер → импорт прежних файлов
+  `playlists.txt`/save/errors → поиск дублей) идёт после синков и загрузок.
 - **Тяжёлое — в подпроцессах:** spotdl, librespot, ffmpeg, обмен OAuth-кодов. Веб-процесс
   не держит их импорты в памяти простоя.
 - **Очередь задач — две дорожки:** интерактивная (ручные действия) и фоновая (синк всех,
@@ -33,6 +38,13 @@
 ```
 app/
   main.py            FastAPI: маршруты, проверка доступа
+  db.py              индекс библиотеки (SQLite): схема, миграции, слияние треков
+  scanner.py         сканер /music → индекс (теги, ID, инкрементально)
+  legacy_import.py   playlists.txt, save- и errors-файлы → индекс
+  matching.py        нормализация названий, уровни совпадения треков
+  dedupe.py          поиск кандидатов в дубли
+  library_queries.py выборки для нового интерфейса
+  spotdl_run.py      обёртка запуска spotdl (уже скачанное — без дозапроса метаданных)
   auth.py            режимы входа, хэш пароля, токены сессий, анти-перебор
   config.py          пути и системные параметры из env
   settings.py        реестр настроек UI (UI → env → дефолт), секреты-файлы, cookies
@@ -55,8 +67,10 @@ app/
   spotify_login.py   вход для Liked Songs (spotdl `saved`)
   navidrome.py       пересканирование Navidrome после изменений
   resolve_names.py   настоящие имена треков вместо битых в errors
-  static/            index.html, app.js, style.css
-tests/test_naming.py сверка имён и id с bash/sed автосинка
+  static/v2/         основной интерфейс: index.html, app.css, icons.svg, js/ (main, api, store, ui, views/)
+  static/            прежний интерфейс на /legacy: index.html, app.js, style.css
+tests/               test_naming (сверка имён с автосинком), test_db, test_scanner,
+                     test_legacy_import, test_matching, test_dedupe, test_upgrade
 Dockerfile           образ: python:3.12-slim-bookworm + ffmpeg + spotdl + Deno + app
 entrypoint.sh        PUID/PGID, umask 002, Deno, дроп привилегий через gosu
 docker-compose.yml   стек для Portainer
@@ -96,7 +110,8 @@ CONF_DIR=./_data/conf MUSIC_DIR=./_data/music APP_PASSWORD=dev AUTOSYNC_INTERVAL
 ```sh
 python -c "import ast,glob;[ast.parse(open(f,encoding='utf-8').read()) for f in glob.glob('app/*.py')]"
 node --check app/static/app.js
-python tests/test_naming.py
+for f in $(find app/static/v2/js -name "*.js"); do node --check "$f"; done
+for t in tests/test_*.py; do python "$t" || echo "FAIL $t"; done
 python -c "import yaml;yaml.safe_load(open('docker-compose.yml'))"
 ```
 

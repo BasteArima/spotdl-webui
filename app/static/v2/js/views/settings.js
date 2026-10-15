@@ -201,7 +201,9 @@ function systemPage() {
   const rows = sys.map((x) => row("point", esc(x.env), esc(x.help || ""), `<code class="small" style="word-break:break-all">${esc(x.value)}</code>`));
   if (env.spotdl_version) rows.push(row("point", "spotdl", "", `<code class="small">${esc(env.spotdl_version)}</code>`));
   rows.push(row("point", "Deno", "нужен YouTube для части роликов", env.deno ? chip("есть", "ok") : chip("нет", "warn")));
-  return `<div class="section-label">Только чтение — задаётся в compose</div><div class="card list">${rows.join("")}</div>`;
+  return `<div class="section-label">Только чтение — задаётся в compose</div><div class="card list">${rows.join("")}</div>
+    <div class="section-label">Прежний интерфейс</div><div class="card list">${row("external-link", "Открыть прежний интерфейс",
+      "запасной вариант на время обкатки нового", `<a class="btn sm" href="/legacy">/legacy</a>`)}</div>`;
 }
 
 // ---------------------------------------------------------------- главная настроек

@@ -15,7 +15,7 @@ import uuid
 from typing import Any, Dict, Optional
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -87,15 +87,26 @@ async def _revalidate_ui(request: Request, call_next):
     открытии: после обновления образа браузер не держит старый JS-модуль."""
     response = await call_next(request)
     path = request.url.path
-    if path.startswith("/static/") or path in ("/", "/new"):
+    if path.startswith("/static/") or path in ("/", "/legacy"):
         response.headers.setdefault("Cache-Control", "no-cache")
     return response
 
 
+@app.get("/")
+def index():
+    return FileResponse(os.path.join(STATIC_DIR, "v2", "index.html"))
+
+
+@app.get("/legacy")
+def index_legacy():
+    """Прежний интерфейс — запасной, пока новый не пройдёт обкатку."""
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+
 @app.get("/new")
 def index_new():
-    """Новый интерфейс (design/plan.md, этап 2) — рядом с прежним, пока не догонит его."""
-    return FileResponse(os.path.join(STATIC_DIR, "v2", "index.html"))
+    # старые закладки на время переезда
+    return RedirectResponse("/", status_code=307)
 
 
 @app.get("/api/auth/status")
@@ -184,11 +195,6 @@ class DownloadBatchIn(BaseModel):
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
-
-
-@app.get("/")
-def index():
-    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
 
 # ------------------------------------------------------------------ playlists

@@ -177,7 +177,8 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
   настройка `verbose_spotdl_log` выключает фильтр. Группы в `job_groups` — только пакетные
   загрузки: повторные автосинки с одним заголовком раньше рисовались «пакетом 4/5».
   Логи задач в памяти (cap 4000 строк) + дублируются в
-  `docker logs`. UI статуса (плавающей панели задач больше нет):
+  `docker logs`. В новом UI статус — строка «что сейчас происходит» (`store.describeNow`),
+  «Главная» и «Активность». В прежнем (/legacy):
   **строка статуса** вверху (`renderStatusStrip`: синки с прогрессом, загрузки,
   апгрейд, иначе «всё спокойно»), **карточки плейлистов** (живой статус из
   `/api/jobs` → `syncs`, сводка из `/api/playlists`: треков по save-файлу, не найдено,
@@ -295,8 +296,8 @@ app/dedupe.py        проход по библиотеке после импо�
                      dedupe его не понижает.
 tests/make_dev_library.py  тестовая библиотека для стенда docker-compose.dev.yml (:4536, данные в _dev/).
 app/upgrade.py       Step 2: массовый апгрейд (контроллер + воркер)
-app/static/          index.html, app.js, style.css — прежний UI (на «/»)
-app/static/v2/       новый UI по design/prototype.html (на «/new», этап 2 плана): index.html, app.css,
+app/static/          index.html, app.js, style.css — прежний UI (на «/legacy», ссылка — в «Настройки» → «О системе»)
+app/static/v2/       основной UI по design/prototype.html (на «/»; «/new» → редирект на «/»): index.html, app.css,
                      icons.svg (спрайт Tabler — только используемые иконки: новая = скачать
                      @tabler/icons из npm и дописать <symbol>), js/main.js (каркас, роутинг #/раздел,
                      вход), js/api.js, js/store.js (опрос /api/jobs + /api/library), js/ui.js,
@@ -352,15 +353,7 @@ docs/                installation / configuration / sources / troubleshooting / 
 - **FLAC-апгрейд** — обсуждался: возможен той же схемой, но FLAC даёт ТОЛЬКО платный
   lossless-сервис (Deezer HiFi / Qobuz / Tidal по ISRC, streamrip/deemix). Spotify FLAC
   не отдаёт. Нужен платный аккаунт — пока не делаем.
-- **Запрошено: редизайн UI/UX под Apple Human Interface Guidelines** (см. ниже).
-
-### Задача: редизайн под Apple HIG
-Цель — переосмыслить [app/static/style.css](app/static/style.css) (и при нужде разметку
-[index.html](app/static/index.html)) в стиле Apple: системный шрифт
-`-apple-system, BlinkMacSystemFont, "SF Pro"`, больше воздуха, мягкие тени, скругления
-~10–12px, спокойная палитра (light/dark по prefers-color-scheme), сегментированные
-контролы вместо вкладок-кнопок, аккуратные «капсульные» кнопки с состояниями
-hover/active, тонкие разделители, таблицы → карточки/списки в духе iOS Settings.
-Логику/JS не ломать (id/классы, на которые завязан app.js, сохранять или править
-синхронно). Делать инкрементально, проверять `node --check app/static/app.js`.
+- Редизайн под Apple HIG сделан новым интерфейсом (`app/static/v2/`, этап 2 плана) — он
+  теперь основной на «/». Прежний (`app/static/`) живёт на «/legacy» до обкатки; новые
+  функции — только в v2, старый не развивать.
 ```
