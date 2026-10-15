@@ -19,7 +19,7 @@ import sys
 import time
 from typing import Dict, List, Optional, Tuple
 
-from . import config, db
+from . import config, db, matching
 
 AUDIO_EXT = {".mp3", ".m4a", ".mp4", ".flac", ".opus", ".ogg", ".oga", ".wav", ".aac", ".wma"}
 TRASH_DIR = ".trash"          # корзина сервиса (склейка дублей) — не индексируется
@@ -176,7 +176,8 @@ def _save(conn, path: str, st, rec: dict, existing_id: Optional[int], now: float
                   album_artist=rec["album_artist"], track_number=rec["track_number"],
                   disc_number=rec["disc_number"], year=rec["year"], duration=rec["duration"],
                   isrc=rec["isrc"], codec=rec["codec"], bitrate=rec["bitrate"],
-                  file_size=st.st_size, file_mtime=st.st_mtime, updated_at=now)
+                  file_size=st.st_size, file_mtime=st.st_mtime, updated_at=now,
+                  norm_key=matching.title_key(rec["title"]))
     if existing_id:
         cols = ", ".join(f"{k} = ?" for k in fields)
         conn.execute(f"UPDATE tracks SET {cols} WHERE id = ?", (*fields.values(), existing_id))
@@ -277,8 +278,10 @@ def scan(music_dir: Optional[str] = None, db_path: Optional[str] = None, full: b
             conn.execute("ROLLBACK")
             raise
         one = lambda sql: conn.execute(sql).fetchone()[0]  # noqa: E731
-        res["with_spotify"] = one("SELECT COUNT(DISTINCT track_id) FROM track_ids WHERE kind = 'spotify'")
-        res["with_youtube"] = one("SELECT COUNT(DISTINCT track_id) FROM track_ids WHERE kind = 'youtube'")
+        files_with = ("SELECT COUNT(DISTINCT i.track_id) FROM track_ids i JOIN tracks t ON t.id = i.track_id "
+                      "WHERE t.status = 'ok' AND i.kind = ")
+        res["with_spotify"] = one(files_with + "'spotify'")
+        res["with_youtube"] = one(files_with + "'youtube'")
         res["with_isrc"] = one("SELECT COUNT(*) FROM tracks WHERE isrc IS NOT NULL AND status = 'ok'")
         res["id_conflicts"] = len(conflicts)
         res["seconds"] = round(time.time() - t0, 1)
@@ -334,6 +337,20 @@ def _cli() -> None:
               f"прочее {reasons.get('other', 0)}) · файлов вне плейлистов {t['files_not_in_playlists']} · "
               f"{imp['seconds']} с", flush=True)
         res["import"] = imp
+        from . import dedupe
+        try:
+            dup = dedupe.find_duplicates()
+        except Exception as e:  # noqa: BLE001
+            print(json.dumps({"ok": False, "error": f"поиск дублей: {type(e).__name__}: {e}"}), flush=True)
+            sys.exit(1)
+        c = dup["candidates"]
+        print(f"[dupes] пар проверено {dup['pairs_checked']} · одинаковых записей среди файлов: "
+              f"тот же ролик/трек {c.get(1, 0)}, тот же ISRC {c.get(2, 0)}, название+исполнитель+длительность "
+              f"{c.get(3, 0)}, под вопросом {c.get(4, 0)} · «не скачан», а файл уже есть — связано "
+              f"{dup['missing_linked']}, под вопросом {dup['missing_maybe']}", flush=True)
+        for ex in dup.pop("examples", []):
+            print(f"[dupes]   {ex}", flush=True)
+        res["dedupe"] = dup
     print(json.dumps(dict(res, ok=True)), flush=True)
 
 

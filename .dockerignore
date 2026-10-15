@@ -11,3 +11,9 @@ _smoke
 _s
 *.spotdl
 cookies.txt
+
+_dev
+design
+docs
+docker-compose.dev.yml
+.claude

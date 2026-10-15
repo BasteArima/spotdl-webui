@@ -221,12 +221,14 @@ def api_library():
     from . import db, scanner
     with db.connect() as conn:
         stats = db.stats(conn)
-        raw = db.get_meta(conn, "legacy_import")
-    try:
-        imported = json.loads(raw) if raw else None
-    except ValueError:
-        imported = None
-    return {"stats": stats, "last_scan": scanner.last_scan(), "legacy_import": imported}
+        raw = {k: db.get_meta(conn, k) for k in ("legacy_import", "dedupe")}
+    meta = {}
+    for k, v in raw.items():
+        try:
+            meta[k] = json.loads(v) if v else None
+        except ValueError:
+            meta[k] = None
+    return {"stats": stats, "last_scan": scanner.last_scan(), **meta}
 
 
 class RescanIn(BaseModel):

@@ -282,6 +282,15 @@ app/scanner.py       скан /music → индекс: теги (WOAS=Spotify, C
 app/legacy_import.py playlists.txt + *.spotdl + errors/*.txt → playlists/sources/items/missing (после
                      каждого скана, пока синк на spotdl; пропускает неизменённые; повторяемый по legacy_id).
                      Трек ищется по ID Spotify, потом по ISRC; иначе ряд «не скачан» (без пути).
+app/matching.py      та же ли запись: parse_title → (основа, маркеры версии); feat/Official Video/
+                     «from the series» отбрасываются, live/remaster/cover/ver./slowed — сравниваются
+                     (разные маркеры = разные треки, решение пользователя). compare → уровень 1–4.
+                     Поменял правила — увеличь NORM_VERSION (norm_key пересчитаются).
+app/dedupe.py        проход по библиотеке после импорта: пары файлов → match_candidates (группы по
+                     ISRC / norm_key / исполнителю, не перебор всех пар); «не скачан» + файл той же
+                     записи (ур. 1–3) → db.merge_tracks. Файлы не трогает. Уровень 1 ставит сканер —
+                     dedupe его не понижает.
+tests/make_dev_library.py  тестовая библиотека для стенда docker-compose.dev.yml (:4536, данные в _dev/).
 app/upgrade.py       Step 2: массовый апгрейд (контроллер + воркер)
 app/static/          index.html, app.js, style.css (тёмная SPA)
 Dockerfile           самодостаточный образ (ffmpeg+spotdl+deno+git+app)

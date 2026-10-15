@@ -1,0 +1,24 @@
+# Локальный стенд для разработки (Docker Desktop на машине разработчика).
+# Боевой стек — docker-compose.yml (образ из GHCR, Portainer на сервере).
+#
+#   docker compose -f docker-compose.dev.yml up -d --build
+#   → http://localhost:4536
+#
+# Данные — в ./_dev (в git и в образ не попадают). Вход без пароля и без
+# автосинка: стенд только для проверок, наружу не открывать.
+services:
+  webui-dev:
+    build: .
+    image: spotdl-webui:dev
+    container_name: spotdl-webui-dev
+    ports:
+      - "4536:8000"
+    environment:
+      - AUTH_ENABLED=false
+      - AUTOSYNC_INTERVAL_HOURS=0
+      - AUTOSYNC_ON_START=false
+    mem_limit: 2g
+    memswap_limit: 2g
+    volumes:
+      - ./_dev/conf:/conf
+      - ./_dev/music:/music

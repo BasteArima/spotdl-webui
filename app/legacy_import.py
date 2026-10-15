@@ -18,7 +18,7 @@ import re
 import time
 from typing import Dict, List, Optional
 
-from . import config, db, errors_parser, playlists
+from . import config, db, errors_parser, matching, playlists
 from .naming import url_type
 
 _KIND_BY_TYPE = {"playlist": "spotify_playlist", "album": "spotify_album",
@@ -68,12 +68,12 @@ def _missing_track(conn, song: dict, spotify_id: Optional[str], now: float) -> i
     year = song.get("year")
     tid = conn.execute(
         "INSERT INTO tracks(path, status, title, artist, artists, album, album_artist, track_number, "
-        "disc_number, year, duration, isrc, added_at, updated_at) "
-        "VALUES (NULL, 'missing', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "disc_number, year, duration, isrc, added_at, updated_at, norm_key) "
+        "VALUES (NULL, 'missing', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (song.get("name") or "?", artists[0] if artists else "", json.dumps(artists, ensure_ascii=False),
          song.get("album_name") or "", song.get("album_artist") or "", song.get("track_number"),
          song.get("disc_number"), year if isinstance(year, int) else None,
-         song.get("duration"), isrc, now, now)).lastrowid
+         song.get("duration"), isrc, now, now, matching.title_key(song.get("name") or "")) ).lastrowid
     if spotify_id:
         conn.execute("INSERT OR IGNORE INTO track_ids(kind, value, track_id, origin) "
                      "VALUES ('spotify', ?, ?, 'savefile')", (spotify_id, tid))
