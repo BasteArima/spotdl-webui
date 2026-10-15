@@ -138,6 +138,11 @@ CREATE TABLE meta (
     value  TEXT
 );
 """),
+    (2, "плейлисты, которые синкает сервис сам (этап 3)", """
+-- managed = 1: состав плейлиста ведёт синк через индекс, m3u собирает сервис.
+-- 0 — по-старому: spotdl sync, m3u и save-файл пишет он, индекс их импортирует.
+ALTER TABLE playlists ADD COLUMN managed INTEGER NOT NULL DEFAULT 0;
+"""),
 ]
 
 SCHEMA_VERSION = MIGRATIONS[-1][0]

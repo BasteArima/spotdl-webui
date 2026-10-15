@@ -41,6 +41,11 @@ services:
       # Фоновый автосинк. 0 = выключить.
       # - AUTOSYNC_INTERVAL_HOURS=24
       # - AUTOSYNC_ON_START=false
+      # Как синкать: spotdl (по-старому) или index (сервис сверяет список с
+      # библиотекой и качает только недостающее, m3u собирает сам).
+      # - SYNC_ENGINE=spotdl
+      # Добивать то, чего нет на YouTube (только при SYNC_ENGINE=index): off / deezer / auto
+      # - AUTO_FETCH=off
       #
       # Deezer-фолбэк (треки, которых нет на YouTube). ARL — секрет уровня пароля;
       # лучше класть файлом в /conf/deezer_arl.txt, а не сюда. Либо:

@@ -6,11 +6,16 @@
   /conf/errors/<имя>.txt → missing: почему не скачан (нет на YouTube / YouTube не
                            отдал / прочее) и найденная ссылка YouTube
 
-Пока синк работает через spotdl (до этапа 3), импорт повторяется после каждого
-скана индекса и держит индекс в актуальном состоянии. Повторяемый: плейлисты
-находятся по legacy_id (md5 ссылки, как имена *.spotdl), состав источника
-переписывается целиком, «не скачанные» треки находятся по своему ID Spotify и не
-плодятся. Плейлист, чьи файлы не менялись с прошлого импорта, пропускается.
+Импорт повторяется после каждого скана индекса — для плейлистов, которые ещё
+синкаются по-старому (spotdl sync). Плейлисты, которые синкает сам сервис
+(playlists.managed = 1, app/index_sync.py), он не трогает. Список плейлистов
+берётся из индекса (с этапа 3 главный он, playlists.txt — выгрузка), поэтому
+импорт плейлисты больше не создаёт и не удаляет.
+
+Повторяемый: плейлисты находятся по legacy_id (md5 ссылки, как имена *.spotdl),
+состав источника переписывается целиком, «не скачанные» треки находятся по
+своему ID Spotify и не плодятся. Плейлист, чьи файлы не менялись с прошлого
+импорта, пропускается.
 """
 import json
 import os
@@ -18,23 +23,15 @@ import re
 import time
 from typing import Dict, List, Optional
 
-from . import config, db, errors_parser, matching, playlists
+from . import config, db, errors_parser, playlists
+from .index_sync import REASON_BY_ERROR as _REASON
+from .index_sync import add_missing_track, find_track
+from .index_sync import spotify_id_of as _spotify_id
 from .naming import url_type
 
-_KIND_BY_TYPE = {"playlist": "spotify_playlist", "album": "spotify_album",
-                 "artist": "spotify_artist", "track": "spotify_track", "saved": "spotify_liked"}
+_KIND_BY_TYPE = playlists.SOURCE_KIND
 _SPOTIFY_ID = re.compile(r"open\.spotify\.com/(?:intl-[a-z]+/)?track/([A-Za-z0-9]{22})")
 _YT_URL = re.compile(r"https?://\S*(?:youtube\.com|youtu\.be)\S*")
-_REASON = {"LookupError": "not_found", "AudioProviderError": "download_failed",
-           "ConnectionError": "network"}
-
-
-def _spotify_id(song: dict) -> Optional[str]:
-    sid = song.get("song_id")
-    if isinstance(sid, str) and len(sid) == 22:
-        return sid
-    m = _SPOTIFY_ID.search(song.get("url") or "")
-    return m.group(1) if m else None
 
 
 def _mtime(path: str) -> Optional[float]:
@@ -42,42 +39,6 @@ def _mtime(path: str) -> Optional[float]:
         return os.path.getmtime(path)
     except OSError:
         return None
-
-
-def _find_track(conn, spotify_id: Optional[str], isrc: Optional[str]) -> Optional[int]:
-    if spotify_id:
-        row = conn.execute("SELECT track_id FROM track_ids WHERE kind = 'spotify' AND value = ?",
-                           (spotify_id,)).fetchone()
-        if row:
-            return row[0]
-    if isrc:
-        # ISRC — та же запись; берём скачанный файл, если такой есть
-        row = conn.execute("SELECT id FROM tracks WHERE isrc = ? ORDER BY status = 'ok' DESC, id LIMIT 1",
-                           (isrc.upper(),)).fetchone()
-        if row:
-            return row[0]
-    return None
-
-
-def _missing_track(conn, song: dict, spotify_id: Optional[str], now: float) -> int:
-    """Трек из плейлиста, файла которого в библиотеке нет: ряд без пути."""
-    artists = song.get("artists") or ([song["artist"]] if song.get("artist") else [])
-    if isinstance(artists, str):
-        artists = [artists]
-    isrc = (song.get("isrc") or "").strip().upper() or None
-    year = song.get("year")
-    tid = conn.execute(
-        "INSERT INTO tracks(path, status, title, artist, artists, album, album_artist, track_number, "
-        "disc_number, year, duration, isrc, added_at, updated_at, norm_key) "
-        "VALUES (NULL, 'missing', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (song.get("name") or "?", artists[0] if artists else "", json.dumps(artists, ensure_ascii=False),
-         song.get("album_name") or "", song.get("album_artist") or "", song.get("track_number"),
-         song.get("disc_number"), year if isinstance(year, int) else None,
-         song.get("duration"), isrc, now, now, matching.title_key(song.get("name") or "")) ).lastrowid
-    if spotify_id:
-        conn.execute("INSERT OR IGNORE INTO track_ids(kind, value, track_id, origin) "
-                     "VALUES ('spotify', ?, ?, 'savefile')", (spotify_id, tid))
-    return tid
 
 
 def _song_from_error(t: dict) -> dict:
@@ -93,7 +54,10 @@ def _import_playlist(conn, pl, position: int, now: float, report: dict) -> None:
     if not kind:
         report["skipped"].append(f"{pl.name}: неизвестный тип ссылки {pl.url}")
         return
-    row = conn.execute("SELECT id FROM playlists WHERE legacy_id = ?", (pl.id,)).fetchone()
+    row = conn.execute("SELECT id, managed FROM playlists WHERE legacy_id = ?", (pl.id,)).fetchone()
+    if row and row["managed"]:
+        report["playlists_managed"] += 1        # состав ведёт синк через индекс
+        return
     if row:
         pid = row[0]
         conn.execute("UPDATE playlists SET name = ?, position = ? WHERE id = ?", (pl.name, position, pid))
@@ -131,9 +95,9 @@ def _import_playlist(conn, pl, position: int, now: float, report: dict) -> None:
             continue
         seen.add(sp)
         st["tracks"] += 1
-        tid = _find_track(conn, sp, song.get("isrc"))
+        tid = find_track(conn, sp, song.get("isrc"))
         if tid is None:
-            tid = _missing_track(conn, song, sp, now)
+            tid = add_missing_track(conn, song, sp, now, origin="savefile")
         status = conn.execute("SELECT status FROM tracks WHERE id = ?", (tid,)).fetchone()[0]
         conn.execute("INSERT OR IGNORE INTO playlist_items(playlist_id, source_id, track_id, position, added_at) "
                      "VALUES (?, ?, ?, ?, ?)", (pid, sid, tid, pos, now))
@@ -184,7 +148,7 @@ def _totals(conn) -> dict:
 def import_legacy(db_path: Optional[str] = None, force: bool = False) -> dict:
     """Импорт playlists.txt / save-файлов / errors в индекс. Возвращает отчёт."""
     t0 = time.time()
-    report: Dict = {"playlists": 0, "playlists_new": 0, "playlists_unchanged": 0, "playlists_removed": 0,
+    report: Dict = {"playlists": 0, "playlists_new": 0, "playlists_unchanged": 0, "playlists_managed": 0,
                     "tracks": 0, "linked": 0, "missing": 0, "unexplained": 0,
                     "orphans_removed": 0, "skipped": []}
     pls = playlists.read_playlists()
@@ -207,12 +171,6 @@ def import_legacy(db_path: Optional[str] = None, force: bool = False) -> dict:
                     report["playlists_unchanged"] += 1
                     continue
                 _import_playlist(conn, pl, pos, time.time(), report)
-            # убранные из playlists.txt (только импортированные — у них есть legacy_id)
-            keep = [pl.id for pl in pls]
-            marks = ",".join("?" for _ in keep) or "''"
-            report["playlists_removed"] = conn.execute(
-                f"DELETE FROM playlists WHERE legacy_id IS NOT NULL AND legacy_id NOT IN ({marks})",
-                keep).rowcount
             # «не скачанные» треки, которые больше ни в одном плейлисте не нужны
             report["orphans_removed"] = conn.execute(
                 "DELETE FROM tracks WHERE status = 'missing' AND id NOT IN "

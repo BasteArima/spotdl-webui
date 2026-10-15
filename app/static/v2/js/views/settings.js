@@ -16,6 +16,7 @@ const PAGES = [
       fields: ["zotify_quality", "safe_mode", "bulk_wait_min", "bulk_wait_max"] },
   ] },
   { label: "Синхронизация и загрузка", items: [
+    { id: "sync", icon: "refresh", title: "Синхронизация", fields: ["sync_engine", "auto_fetch"] },
     { id: "autosync", icon: "clock", title: "Автосинк", fields: ["autosync_interval_hours", "autosync_on_start", "autosync_start_delay"] },
     { id: "youtube", icon: "download", title: "Загрузка с YouTube",
       fields: ["youtube_bitrate", "audio_providers", "overwrite", "youtube_sleep", "spotdl_threads", "download_track_timeout"] },

@@ -178,6 +178,11 @@ def _save(conn, path: str, st, rec: dict, existing_id: Optional[int], now: float
                   isrc=rec["isrc"], codec=rec["codec"], bitrate=rec["bitrate"],
                   file_size=st.st_size, file_mtime=st.st_mtime, updated_at=now,
                   norm_key=matching.title_key(rec["title"]))
+    if not existing_id:
+        # путь мог появиться в индексе уже после начала скана: синк через индекс
+        # записывает его сразу после загрузки (app/index_sync.py)
+        row = conn.execute("SELECT id FROM tracks WHERE path = ?", (path,)).fetchone()
+        existing_id = row[0] if row else None
     if existing_id:
         cols = ", ".join(f"{k} = ?" for k in fields)
         conn.execute(f"UPDATE tracks SET {cols} WHERE id = ?", (*fields.values(), existing_id))
@@ -330,7 +335,7 @@ def _cli() -> None:
         t = imp["totals"]
         reasons = t["missing_by_reason"]
         print(f"[import] плейлистов {imp['playlists']} (новых {imp['playlists_new']}, без изменений "
-              f"{imp['playlists_unchanged']}, убрано {imp['playlists_removed']}) · в плейлистах треков "
+              f"{imp['playlists_unchanged']}, синкает сервис {imp['playlists_managed']}) · в плейлистах треков "
               f"{t['in_playlists']}: скачано {t['downloaded']}, не скачано {t['missing']} "
               f"(нет на YouTube {reasons.get('not_found', 0)}, YouTube не отдал "
               f"{reasons.get('download_failed', 0)}, сеть {reasons.get('network', 0)}, "
@@ -351,6 +356,16 @@ def _cli() -> None:
         for ex in dup.pop("examples", []):
             print(f"[dupes]   {ex}", flush=True)
         res["dedupe"] = dup
+        # m3u плейлистов, которые синкает сервис, — по свежему индексу
+        from . import m3u_gen
+        try:
+            with db.connect() as conn:
+                res["m3u_written"] = m3u_gen.write_managed(conn)
+        except Exception as e:  # noqa: BLE001
+            print(json.dumps({"ok": False, "error": f"m3u: {type(e).__name__}: {e}"}), flush=True)
+            sys.exit(1)
+        if res["m3u_written"]:
+            print(f"[m3u] обновлено плейлистов: {res['m3u_written']}", flush=True)
     print(json.dumps(dict(res, ok=True)), flush=True)
 
 

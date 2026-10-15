@@ -169,9 +169,13 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
   (`/conf/.webui-locks/`). spotdl запускается через [app/spotdl_run.py](app/spotdl_run.py):
   в `sync <URL>` у треков плейлиста нет genres/disc_count, и spotdl ДО проверки «файл уже
   есть» делал reinit (Song.from_url, ~3 запроса к Spotify) — для КАЖДОГО скачанного трека;
-  автосинк 52 плейлистов шёл ~сутки. Обёртка патчит `Downloader.search_and_download`:
-  если файл есть (та же проверка, что у spotdl) — genres=[], disc_count заполняются, reinit
-  нет. Только для `--overwrite skip`. Вывод spotdl в лог задачи/docker logs фильтрует
+  автосинк 52 плейлистов шёл ~сутки. Обёртка патчит `Downloader.async_search_and_download`
+  (в spotdl 4.5+ загрузки идут через него, pool_download; `search_and_download` — только
+  у старых версий, патч на нём молча не срабатывал): если файл есть (та же проверка, что
+  у spotdl) — genres=[], disc_count заполняются, reinit нет. Только для `--overwrite skip`.
+  С env `SPOTDL_WEBUI_RESULTS=1` (run_spotdl(results=True)) обёртка печатает итог каждого
+  трека строкой `@@webui-result {json}` (url, path, existed, download_url, error) — её
+  читает синк через индекс; в лог задачи строки не идут. Вывод spotdl в лог задачи/docker logs фильтрует
   `jobs.SpotdlLogFilter` (без строк на каждый пропущенный трек, рамок трейсбеков rich и
   сбоев поиска текстов; в конце плейлиста — строка `[итог]`), прогресс видит всё;
   настройка `verbose_spotdl_log` выключает фильтр. Группы в `job_groups` — только пакетные
@@ -295,6 +299,27 @@ app/dedupe.py        проход по библиотеке после импо�
                      записи (ур. 1–3) → db.merge_tracks. Файлы не трогает. Уровень 1 ставит сканер —
                      dedupe его не понижает.
 tests/make_dev_library.py  тестовая библиотека для стенда docker-compose.dev.yml (:4536, данные в _dev/).
+app/playlists.py     плейлисты: с этапа 3 главный список — в индексе (playlists + playlist_sources,
+                     источник Spotify = ref ссылка/'saved'); один раз переносится из playlists.txt
+                     (meta playlists_master=db), дальше playlists.txt — ВЫГРУЗКА после каждой
+                     правки (для синка по-старому, /legacy и отката образа), ручные правки файла
+                     не читаются. read_playlists()/find_by_url — из индекса; legacy_id = md5(ссылки).
+app/index_sync.py    синк через индекс (настройка sync_engine=index): spotify_source → reconcile
+                     (ID Spotify → ISRC → dedupe.link_missing ур. 1–3: файл другого релиза не качаем)
+                     → `spotdl download <только недостающие>` с results=True → apply_results (путь /
+                     слияние с уже проиндексированным файлом / причина в missing) → m3u_gen. Плейлист
+                     получает playlists.managed=1: legacy_import его не трогает, m3u пишет сервис;
+                     синк по-старому ставит managed=0. Пустой список не применяется (сбой площадки).
+                     auto_fetch_candidates — «нет на YouTube» → Deezer/Авто (настройка auto_fetch),
+                     попытка помечается в missing.tried, тот же источник — раз в неделю.
+app/spotify_source.py список треков источника без загрузки (CLI-подпроцесс). spotdl 4.5 по умолчанию
+                     ходит через SpotipyFree (веб-плеер, без dev-приложения): у треков плейлиста НЕТ
+                     альбома, ISRC и tracks_count — сопоставление держится на ID Spotify, а для
+                     скачивания spotdl всё равно делает reinit (3 запроса) — но только недостающих.
+                     «Playlist not available or not accessible» — ответ SpotipyFree → unavailable.
+app/m3u_gen.py       m3u для managed-плейлистов из индекса: только скачанное, по порядку источника,
+                     формат и путь как у spotdl; переписывается только при изменении. Пишется в конце
+                     синка и в конце задачи index (scanner CLI → m3u_written → Navidrome-скан).
 app/upgrade.py       Step 2: массовый апгрейд (контроллер + воркер)
 app/static/          index.html, app.js, style.css — прежний UI (на «/legacy», ссылка — в «Настройки» → «О системе»)
 app/static/v2/       основной UI по design/prototype.html (на «/»; «/new» → редирект на «/»): index.html, app.css,

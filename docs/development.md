@@ -50,7 +50,10 @@ app/
   settings.py        реестр настроек UI (UI → env → дефолт), секреты-файлы, cookies
   jobs.py            очередь (2 дорожки), воркеры, локи, запуск spotdl, планировщик
   naming.py          safe-имя, id плейлиста, тип ссылки — покрыто тестами
-  playlists.py       playlists.txt
+  playlists.py       плейлисты: главный список в индексе, playlists.txt — выгрузка
+  index_sync.py      синк через индекс: сверка списка с библиотекой, итоги загрузки, автодобивание
+  spotify_source.py  список треков источника Spotify без загрузки (CLI для подпроцесса)
+  m3u_gen.py         m3u плейлистов, которые синкает сервис, — из индекса
   errors_parser.py   разбор errors/*.txt (+ дедуп), удаление добитых
   health.py          проверка окружения для баннера
   library.py         место трека в библиотеке: путь по шаблону, ffmpeg, теги, обложка, m3u
@@ -70,7 +73,7 @@ app/
   static/v2/         основной интерфейс: index.html, app.css, icons.svg, js/ (main, api, store, ui, views/)
   static/            прежний интерфейс на /legacy: index.html, app.js, style.css
 tests/               test_naming (сверка имён с автосинком), test_db, test_scanner,
-                     test_legacy_import, test_matching, test_dedupe, test_upgrade
+                     test_legacy_import, test_matching, test_dedupe, test_index_sync, test_upgrade
 Dockerfile           образ: python:3.12-slim-bookworm + ffmpeg + spotdl + Deno + app
 entrypoint.sh        PUID/PGID, umask 002, Deno, дроп привилегий через gosu
 docker-compose.yml   стек для Portainer

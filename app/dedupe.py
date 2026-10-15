@@ -50,16 +50,21 @@ def _load(conn) -> Dict[int, dict]:
     return tracks
 
 
+def _group_keys(t: dict) -> list:
+    """Группы, внутри которых ищутся пары: ISRC, ключ названия, исполнители."""
+    keys = [("isrc", t["isrc"])] if t["isrc"] else []
+    if t["norm_key"]:
+        keys.append(("title", t["norm_key"]))
+    keys += [("artist", k) for k in matching.artist_keys(t["artists"])]
+    return keys
+
+
 def _pairs(tracks: Dict[int, dict]):
     """Пары-претенденты: внутри групп по ISRC, ключу названия, исполнителю."""
     groups = defaultdict(list)
     for t in tracks.values():
-        if t["isrc"]:
-            groups[("isrc", t["isrc"])].append(t["id"])
-        if t["norm_key"]:
-            groups[("title", t["norm_key"])].append(t["id"])
-        for k in matching.artist_keys(t["artists"]):
-            groups[("artist", k)].append(t["id"])
+        for key in _group_keys(t):
+            groups[key].append(t["id"])
     seen = set()
     for ids in groups.values():
         if len(ids) < 2 or len(ids) > _GROUP_CAP:
@@ -121,3 +126,38 @@ def find_duplicates(db_path: Optional[str] = None) -> dict:
                 report["examples"].append(f"[{r['level']}] {r['aa']} — {r['ta']}  ↔  {r['ab']} — {r['tb']} · {r['reason']}")
             db.set_meta(conn, "dedupe", json.dumps({k: v for k, v in report.items() if k != "examples"}))
     return report
+
+
+def link_missing(conn, ids) -> Dict[int, int]:
+    """«Не скачанные» ids, для которых в библиотеке уже есть файл той же записи
+    (уровни 1–3), — связать с файлом (db.merge_tracks), чтобы синк не качал
+    второй раз то, что уже лежит под другим релизом. Вызывать в транзакции.
+    Возвращает {id «не скачанного»: id файла}."""
+    ids = set(ids)
+    if not ids:
+        return {}
+    refresh_norm_keys(conn)
+    tracks = _load(conn)
+    groups = defaultdict(list)
+    for t in tracks.values():
+        if t["status"] == "ok":
+            for key in _group_keys(t):
+                groups[key].append(t["id"])
+    linked: Dict[int, int] = {}
+    for mid in ids:
+        miss = tracks.get(mid)
+        if not miss or miss["status"] != "missing":
+            continue
+        best = None
+        cands = set()
+        for key in _group_keys(miss):
+            if len(groups.get(key, ())) <= _GROUP_CAP:
+                cands.update(groups.get(key, ()))
+        for fid in cands:
+            res = matching.compare(miss, tracks[fid])
+            if res and res[0] <= 3 and (best is None or res[0] < best[1]):
+                best = (fid, res[0])
+        if best:
+            db.merge_tracks(conn, mid, best[0])
+            linked[mid] = best[0]
+    return linked

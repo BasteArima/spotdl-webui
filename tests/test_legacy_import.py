@@ -17,7 +17,7 @@ os.environ["PLAYLISTS_M3U_DIR"] = os.path.join(_ROOT, "music", "playlists")
 os.environ["ERRORS_DIR"] = os.path.join(_ROOT, "conf", "errors")
 os.environ["PLAYLISTS_FILE"] = os.path.join(_ROOT, "conf", "playlists.txt")
 
-from app import config, db, legacy_import, scanner  # noqa: E402
+from app import config, db, legacy_import, playlists, scanner  # noqa: E402
 from app.naming import playlist_id, safe_name  # noqa: E402
 
 PL_URL = "https://open.spotify.com/playlist/37i9dQZF1DX0000000000001"
@@ -87,8 +87,8 @@ def test_import_playlists_items_and_reasons():
     _setup()
     scanner.scan()
     rep = legacy_import.import_legacy()
-    assert rep["playlists"] == 4 and rep["playlists_new"] == 3, rep
-    assert len(rep["skipped"]) == 1 and "Странная" in rep["skipped"][0], rep["skipped"]
+    # список переносится в индекс до импорта (playlists.ensure_db_master); ссылка не Spotify — не переносится
+    assert rep["playlists"] == 3 and rep["playlists_new"] == 0 and not rep["skipped"], rep
     with db.connect() as conn:
         kinds = sorted(r[0] for r in _q(conn, "SELECT kind FROM playlist_sources"))
         assert kinds == ["spotify_album", "spotify_liked", "spotify_playlist"], kinds
@@ -153,10 +153,14 @@ def test_removed_playlist_and_orphans():
     _setup()
     scanner.scan()
     legacy_import.import_legacy()
+    # правка файла руками больше ничего не удаляет: главный список — в индексе
     with open(config.PLAYLISTS_FILE, "w", encoding="utf-8") as fh:
         fh.write("Любимые|saved\n")
-    rep = legacy_import.import_legacy()
-    assert rep["playlists_removed"] == 2, rep
+    legacy_import.import_legacy()
+    assert len(playlists.read_playlists()) == 3
+    assert playlists.delete_playlist(PL_URL) and playlists.delete_playlist(AL_URL)
+    with open(config.PLAYLISTS_FILE, encoding="utf-8") as fh:
+        assert [ln for ln in fh.read().splitlines() if not ln.startswith("#")] == ["Любимые|saved"]
     with db.connect() as conn:
         titles = {r[0] for r in _q(conn, "SELECT title FROM tracks WHERE status = 'missing'")}
         assert titles == {"Foxtrot"}, titles             # Charlie/Delta/Golf больше никому не нужны
@@ -171,7 +175,7 @@ def test_cli_runs_scan_and_import():
     assert r.returncode == 0, r.stdout + r.stderr
     last = json.loads(r.stdout.strip().splitlines()[-1])
     assert last["ok"] and last["import"]["totals"]["missing"] == 4, last
-    assert "[import] плейлистов 4" in r.stdout, r.stdout
+    assert "[import] плейлистов 3" in r.stdout, r.stdout
 
 
 if __name__ == "__main__":

@@ -24,7 +24,7 @@ import threading
 import time
 from typing import Callable, Dict, List, Optional
 
-from . import config, errors_parser, navidrome, playlists, settings
+from . import config, db, errors_parser, index_sync, navidrome, playlists, settings
 from .naming import is_saved
 
 # ------------------------------------------------------------------ состояние
@@ -178,6 +178,9 @@ class SyncProgress:
         self.index, self.count = index, count      # N-й плейлист из M (синк всех)
         self.phase = "prepare"   # list (Liked Songs) | prepare (метаданные) | download | done
         self.total = 0
+        # синк через индекс качает только недостающее: spotdl считает «K/N» по
+        # ним, а base — сколько треков плейлиста уже было до загрузки
+        self.base = 0
         self.processed = self.downloaded = self.skipped = 0
         self.lookup_failed = self.download_failed = 0
         self.dl_streak = 0          # «YouTube не отдал» подряд, без удачных загрузок
@@ -224,7 +227,7 @@ class SyncProgress:
             return None
         m = self._COMPLETE.search(line)
         if m:
-            self.processed, self.total = int(m.group(1)), int(m.group(2))
+            self.processed, self.total = self.base + int(m.group(1)), self.base + int(m.group(2))
             self._downloading()
             self._changed()
             return
@@ -592,7 +595,8 @@ def _run_process(job: Job, cmd: List[str], cwd: str = "/",
                  timeout: Optional[float] = None, kill_on_cancel: bool = True,
                  on_line: Optional[Callable[[str], Optional[str]]] = None,
                  keep_line: Optional[Callable[[str], bool]] = None,
-                 display: Optional[List[str]] = None):
+                 display: Optional[List[str]] = None,
+                 extra_env: Optional[Dict[str, str]] = None):
     """Запускает процесс, построчно пишет stdout/stderr в лог задачи И в stdout
     контейнера (видно в `docker logs`). Возвращает (код_возврата, строки_вывода).
 
@@ -613,6 +617,7 @@ def _run_process(job: Job, cmd: List[str], cwd: str = "/",
     # spotdl пишет через rich, а тот без терминала режет строки на 80 колонок —
     # длинное «Исполнитель - Название: Done» разорвалось бы и не распозналось
     env["COLUMNS"] = "1000"
+    env.update(extra_env or {})
     out_lines: List[str] = []
     try:
         proc = subprocess.Popen(
@@ -703,21 +708,30 @@ def _signal_name(num: int) -> str:
 
 
 def run_spotdl(job: Job, args: List[str], timeout: Optional[float] = None,
-               kill_on_cancel: bool = True, on_line: Optional[Callable[[str], Optional[str]]] = None):
+               kill_on_cancel: bool = True, on_line: Optional[Callable[[str], Optional[str]]] = None,
+               results: bool = False):
     """Запуск spotdl с cwd=/ — критично: spotdl 4.5.0 прогоняет части пути --m3u
     через sanitize, который вырезает '/', превращая абсолютный путь в
     относительный. Из cwd=/ он резолвится обратно в /music/... (как автосинк).
 
     timeout задаём для одиночного скачивания трека (YouTube); для sync — None
     (синк целого плейлиста легитимно долгий) + kill_on_cancel=False (мягкая отмена,
-    чтобы не оборвать запись m3u/save-file)."""
+    чтобы не оборвать запись m3u/save-file).
+
+    results=True — обёртка печатает итог каждого трека строкой `@@webui-result`
+    (для синка через индекс); в лог задачи эти строки не идут."""
     cmd = [config.SPOTDL_BIN] + args
     if config.SPOTDL_BIN == "spotdl":
         # обёртка: уже скачанные треки — без дозапроса метаданных (app/spotdl_run.py)
         cmd = [sys.executable, os.path.join(_PROJECT_DIR, "app", "spotdl_run.py")] + args
-    keep = None if settings.get("verbose_spotdl_log") else SpotdlLogFilter()
+    filt = None if settings.get("verbose_spotdl_log") else SpotdlLogFilter()
+
+    def keep(line: str) -> bool:
+        return not line.startswith(index_sync.RESULT_PREFIX) and (filt is None or filt(line))
     return _run_process(job, cmd, cwd="/", keep_line=keep, display=["spotdl"] + args,
-                        timeout=timeout, kill_on_cancel=kill_on_cancel, on_line=on_line)
+                        timeout=timeout, kill_on_cancel=kill_on_cancel, on_line=on_line,
+                        extra_env={"SPOTDL_WEBUI_RESULTS": "1"} if results else None)
+
 
 
 def _lyrics_args() -> List[str]:
@@ -962,6 +976,9 @@ def _sync_locked(job: Job, pl: playlists.Playlist, index: int = 0, count: int = 
 
 
 def _sync_locked_inner(job: Job, pl: playlists.Playlist, prog: "SyncProgress") -> None:
+    if settings.get("sync_engine") == "index":
+        _sync_index(job, pl, prog)
+        return
     args = None
     if is_saved(pl.url):
         # данные — ДО сброса errors-файла: не получили — старые «ненайденные»
@@ -986,6 +1003,56 @@ def _sync_locked_inner(job: Job, pl: playlists.Playlist, prog: "SyncProgress") -
         rc, _out = run_spotdl(job, args or sync_args(pl), kill_on_cancel=False, on_line=prog.feed)
         _finish_errors_file(job, pl.safe, ok=(rc == 0))
     _mark_source_availability(job, pl, _out)
+    _finish_sync(job, pl, prog, rc)
+
+
+def _sync_index(job: Job, pl: playlists.Playlist, prog: "SyncProgress") -> None:
+    """Синк через индекс (app/index_sync.py): список без загрузки, сверка с
+    библиотекой, загрузка только недостающего, m3u из индекса."""
+    with PlaylistLock(pl.id, job):
+        try:
+            rc = index_sync.run(job, pl, prog)
+        except index_sync.ListUnavailable as e:
+            prog.set_phase("done")
+            job.append(f"[sync] «{pl.name}»: площадка не отдаёт этот список (персональная подборка, "
+                       f"закрытый или удалён) — он отмечен во «Внимании». Ответ: {e}")
+            return
+        except LikedSongsUnavailable as e:
+            prog.set_phase("done")
+            raise LikedSongsUnavailable(f"{pl.name}: {e}") from None
+        except BaseException:
+            prog.set_phase("done")
+            raise
+    _finish_sync(job, pl, prog, rc)
+    _auto_fetch(job, pl)
+
+
+_AUTO_FETCH_LABEL = {"deezer": "Deezer", "auto": "Авто: Deezer, потом Spotify напрямую"}
+
+
+def _auto_fetch(job: Job, pl: playlists.Playlist) -> None:
+    """Задача 3.4: то, чего нет на YouTube, — сразу в загрузку выбранным
+    источником (настройка «Добивать не найденное»)."""
+    mode = settings.get("auto_fetch")
+    if mode == "off" or job.cancelled:
+        return
+    if not config.deezer_arl() and (mode == "deezer" or not config.zotify_configured()):
+        job.append(f"[auto] добивание ({_AUTO_FETCH_LABEL[mode]}) включено, но источник не настроен — пропуск")
+        return
+    with db.connect() as conn, db.transaction(conn):
+        pid = playlists.db_id(conn, pl.url)
+        items = index_sync.auto_fetch_candidates(conn, pid, mode, time.time()) if pid else []
+    for it in items:
+        if mode == "deezer":
+            enqueue_deezer(it["spotify_url"], pl.safe, subject=it["subject"])
+        else:
+            enqueue_auto(it["spotify_url"], pl.safe, bulk=True, subject=it["subject"])
+    if items:
+        job.append(f"[auto] нет на YouTube: {len(items)} — поставлено добивание ({_AUTO_FETCH_LABEL[mode]})")
+
+
+def _finish_sync(job: Job, pl: playlists.Playlist, prog: "SyncProgress", rc: int) -> None:
+    """Итог синка в лог, проба YouTube при подозрении на блок, запись итога."""
     summary = _sync_summary(pl.name, prog, rc)
     job.append(summary)
     print(f"[{job.id}] {summary}", flush=True)
@@ -1009,11 +1076,12 @@ def _mark_source_availability(job: Job, pl: playlists.Playlist, out: List[str]) 
     «Внимании», а не будет молча падать на каждом синке."""
     unavailable = any(any(m in ln for m in _UNAVAILABLE_MARKERS) for ln in out)
     try:
-        from . import db
         with db.connect() as conn:
             conn.execute("UPDATE playlist_sources SET status = ? WHERE playlist_id = "
                          "(SELECT id FROM playlists WHERE legacy_id = ?)",
                          ("unavailable" if unavailable else "ok", pl.id))
+            # синк по-старому: состав и m3u снова ведёт spotdl (импорт save-файла)
+            conn.execute("UPDATE playlists SET managed = 0 WHERE legacy_id = ?", (pl.id,))
     except Exception as exc:  # noqa: BLE001 — индекс не должен ронять синк
         print(f"[index] не удалось отметить доступность «{pl.name}»: {exc}", flush=True)
     if unavailable:
@@ -1044,8 +1112,9 @@ def _run_sync_playlist(job: Job, pl: playlists.Playlist) -> None:
 def _run_sync_all(job: Job) -> None:
     pls = playlists.read_playlists()
     if not pls:
-        job.append("[info] playlists.txt пуст — нечего синхронизировать")
+        job.append("[info] плейлистов нет — нечего синхронизировать")
         return
+    failed: List[str] = []
     for i, pl in enumerate(pls, 1):
         if job.cancelled:
             job.append("[cancelled] остановлено пользователем")
@@ -1055,8 +1124,31 @@ def _run_sync_all(job: Job) -> None:
             _sync_locked(job, pl, index=i, count=len(pls))
         except TimeoutError as e:
             job.append(f"[skip] {pl.name}: {e}")
-        except (LikedSongsUnavailable, AlreadySyncing) as e:
-            job.append(f"[skip] {e}")
+        except (LikedSongsUnavailable, AlreadySyncing, index_sync.ListError) as e:
+            job.append(f"[skip] {pl.name}: {e}" if isinstance(e, index_sync.ListError) else f"[skip] {e}")
+        except Exception as e:  # noqa: BLE001 — сбой одного плейлиста не останавливает остальные
+            failed.append(pl.name)
+            job.append(f"[error] {pl.name}: {type(e).__name__}: {e}")
+            print(f"[{job.id}] [error] {pl.name}: {type(e).__name__}: {e}", flush=True)
+    if failed:
+        job.status = "error"
+        job.append(f"[error] не синхронизировались из-за сбоя: {', '.join(failed)} — подробности выше")
+
+
+def _m3u_safe(safe: str) -> str:
+    """Имя m3u для лёгкой дозаписи трека после загрузки — или "", если m3u
+    этого плейлиста собирает сервис из индекса (дозапишет сам после скана)."""
+    if not safe:
+        return ""
+    pl = playlists.find_by_safe(safe)
+    if not pl:
+        return safe
+    try:
+        with db.connect() as conn:
+            row = conn.execute("SELECT managed FROM playlists WHERE legacy_id = ?", (pl.id,)).fetchone()
+        return "" if row and row[0] else safe
+    except Exception:  # noqa: BLE001 — индекс недоступен: дозапишем по-старому
+        return safe
 
 
 def m3u_append_args(spotify_url: str, safe: str) -> List[str]:
@@ -1078,8 +1170,9 @@ def _download_track(job: Job, spotify_url: str, youtube_url: str, safe: str) -> 
     else:
         job.append("[ok] трек скачан (в errors-файле не найден — возможно, уже убран)")
     # лёгкая дозапись ТОЛЬКО этого трека в m3u (вместо тяжёлого sync всего плейлиста)
-    if safe:
-        _run_process(job, m3u_append_args(spotify_url, safe), cwd="/app", timeout=180)
+    m3u = _m3u_safe(safe)
+    if m3u:
+        _run_process(job, m3u_append_args(spotify_url, m3u), cwd="/app", timeout=180)
     return True
 
 
@@ -1099,7 +1192,7 @@ def _run_deezer(job: Job, spotify_url: str, safe: str) -> None:
     """Скачать трек с Deezer по ISRC (точное совпадение со Spotify) и положить в
     библиотеку. Для треков, которых нет на YouTube."""
     job.append("=== попытка скачать с Deezer (по ISRC) ===")
-    rc, out = _run_process(job, deezer_dl_args(spotify_url, safe), cwd="/app",
+    rc, out = _run_process(job, deezer_dl_args(spotify_url, _m3u_safe(safe)), cwd="/app",
                            timeout=settings.get("download_track_timeout"))
     ok = rc == 0 and any(line.startswith("OK ") for line in out)
     if not ok:
@@ -1146,7 +1239,7 @@ def _run_zotify(job: Job, spotify_url: str, safe: str, force_realtime: bool = Fa
     Для массовой (force_realtime) при безопасном режиме — ещё пауза между треками."""
     realtime = force_realtime or settings.get_safe_mode()
     job.append(f"=== Spotify (librespot): скачивание{' [real-time]' if realtime else ''} ===")
-    rc, out = _run_process(job, spotify_dl_args(spotify_url, safe, realtime), cwd="/app",
+    rc, out = _run_process(job, spotify_dl_args(spotify_url, _m3u_safe(safe), realtime), cwd="/app",
                            timeout=settings.get("download_track_timeout"))
     ok = rc == 0 and any(line.startswith("OK ") for line in out)
     if not ok:
@@ -1176,7 +1269,7 @@ def _run_upload(job: Job, temp_path: str, spotify_url: str, safe: str, orig_name
     обложка со Spotify, размещение по тому же шаблону пути, что и обычная загрузка.
     То же, что spotdl делает после скачивания аудио — только источник локальный."""
     job.append(f"=== заливка локального файла: {orig_name} ===")
-    rc, out = _run_process(job, place_localfile_args(temp_path, spotify_url, safe), cwd="/app",
+    rc, out = _run_process(job, place_localfile_args(temp_path, spotify_url, _m3u_safe(safe)), cwd="/app",
                            timeout=settings.get("download_track_timeout"))
     try:
         os.remove(temp_path)
@@ -1228,6 +1321,13 @@ def _run_index(job: Job, full: bool) -> None:
     rc, out = _run_process(job, cmd, cwd=_PROJECT_DIR, display=["scanner"] + cmd[3:])
     if rc != 0:
         job.status = "error"
+        return
+    try:
+        res = json.loads(out[-1]) if out and out[-1].startswith("{") else {}
+    except ValueError:
+        res = {}
+    if res.get("m3u_written"):
+        navidrome.notify_changed()       # m3u плейлистов переписаны — пусть Navidrome перечитает
 
 
 def enqueue_index(full: bool = False) -> Optional[Job]:
