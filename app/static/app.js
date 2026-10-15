@@ -1196,7 +1196,10 @@ function renderStatusStrip(d) {
   });
 
   // 2. загрузки треков (Ненайденные): одна строка на всё
-  const tracks = running.filter(j => !j.progress && !["sync", "sync-all", "autosync"].includes(j.kind));
+  const tracks = running.filter(j => !j.progress && !["sync", "sync-all", "autosync", "index"].includes(j.kind));
+  const idx = running.find(j => j.kind === "index");
+  if (idx) items.push(stripItem({ icon: "⟳", iconCls: "spin", title: "Обновляю индекс библиотеки",
+    sub: "читаю теги файлов — ничего не меняется", onClick: () => openJobLog(idx.id) }));
   const batch = (d.groups || []).find(g => g.running > 0 || g.queued > 0);
   if (tracks.length || batch) {
     const cur = tracks[0];

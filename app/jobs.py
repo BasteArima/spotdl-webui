@@ -74,6 +74,7 @@ _LANE_BY_KIND = {
     "sync": LANE_INTERACTIVE,        # ручной sync одного плейлиста / обновление m3u
     "sync-all": LANE_BACKGROUND,     # «Синхронизировать всё» (тяжёлая)
     "autosync": LANE_BACKGROUND,     # плановый автосинк
+    "index": LANE_BACKGROUND,        # скан /music → индекс библиотеки (app/scanner.py)
 }
 
 
@@ -1186,6 +1187,27 @@ def enqueue_sync_all(auto: bool = False) -> Job:
     return _enqueue(job)
 
 
+def _run_index(job: Job, full: bool) -> None:
+    """Скан библиотеки в отдельном процессе (mutagen и обход тысяч файлов не
+    нужны веб-процессу). Итог — JSON последней строкой."""
+    cmd = [sys.executable, "-m", "app.scanner"] + (["--full"] if full else [])
+    rc, out = _run_process(job, cmd, cwd=_PROJECT_DIR, display=["scanner"] + cmd[3:])
+    if rc != 0:
+        job.status = "error"
+
+
+def enqueue_index(full: bool = False) -> Optional[Job]:
+    """Обновить индекс библиотеки. Если скан уже ждёт в очереди — второй не
+    ставится (после пачки синков хватит одного)."""
+    with _jobs_lock:
+        for jid in _jobs_order:
+            j = _jobs[jid]
+            if j.kind == "index" and j.status == "queued":
+                return j
+    title = "Полная пересборка индекса библиотеки" if full else "Обновление индекса библиотеки"
+    return _enqueue(Job("index", title, lambda job: _run_index(job, full)))
+
+
 def _has_pending_sync_all() -> bool:
     """Есть ли уже незавершённый sync-всех/автосинк — чтобы не плодить дубли."""
     with _jobs_lock:
@@ -1480,8 +1502,13 @@ def _worker(lane: str) -> None:
             job.append(f"[exception] {type(e).__name__}: {e}")
         finally:
             job.finished = time.time()
-            if job.status == "done":
+            if job.status == "done" and job.kind != "index":
                 navidrome.notify_changed()   # скан — позже, когда очередь затихнет
+            if job.status == "done" and job.kind in ("sync", "sync-all", "autosync"):
+                try:
+                    enqueue_index()          # новые файлы — в индекс библиотеки
+                except Exception as exc:  # noqa: BLE001 — индекс не должен ронять воркер
+                    print(f"[index] не удалось поставить скан: {exc}", flush=True)
             # Завершённой задаче полный лог больше не нужен: оставляем хвост,
             # чистим вытесненные задачи и отдаём память ОС — иначе сервис
             # держит пик потребления всё время простоя.

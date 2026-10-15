@@ -143,7 +143,6 @@ CREATE TABLE meta (
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 _migrate_lock = threading.Lock()
-_migrated_paths: set = set()
 
 
 def _open(path: str) -> sqlite3.Connection:
@@ -184,16 +183,16 @@ def migrate(conn: sqlite3.Connection) -> int:
 
 @contextmanager
 def connect(path: Optional[str] = None) -> Iterator[sqlite3.Connection]:
-    """Соединение с индексом; при первом обращении к файлу в этом процессе —
-    миграции. Закрывается на выходе из with."""
+    """Соединение с индексом; если схема отстаёт (новая база, обновили образ,
+    файл удалили на ходу) — сначала миграции. Закрывается на выходе из with."""
     path = path or config.LIBRARY_DB
     conn = _open(path)
     try:
-        if path not in _migrated_paths:
+        # одна PRAGMA на соединение — дешевле, чем помнить «уже мигрировали»,
+        # и переживает удалённый/подменённый файл базы
+        if schema_version(conn) != SCHEMA_VERSION:
             with _migrate_lock:
-                if path not in _migrated_paths:
-                    migrate(conn)
-                    _migrated_paths.add(path)
+                migrate(conn)
         yield conn
     finally:
         conn.close()

@@ -39,6 +39,7 @@ def _startup() -> None:
     jobs.clear_stale_locks()   # остались от рестарта посреди синка — сейчас синков нет
     jobs.start_worker()
     jobs.start_scheduler()  # фоновый автосинк по расписанию (если включён)
+    jobs.enqueue_index()    # индекс библиотеки догоняет файлы (инкрементально — секунды)
 
 
 # ------------------------------------------------------------------ авторизация
@@ -213,6 +214,26 @@ def api_delete_playlist(body: PlaylistRef):
 
 
 # ------------------------------------------------------------------ errors
+# ---- индекс библиотеки (design/plan.md, этап 1) ----
+@app.get("/api/library", dependencies=[Depends(require_auth)])
+def api_library():
+    """Сводка индекса: треков, не скачано, дублей; итог последнего скана."""
+    from . import db, scanner
+    with db.connect() as conn:
+        stats = db.stats(conn)
+    return {"stats": stats, "last_scan": scanner.last_scan()}
+
+
+class RescanIn(BaseModel):
+    full: bool = False
+
+
+@app.post("/api/library/rescan", dependencies=[Depends(require_auth)])
+def api_library_rescan(body: RescanIn):
+    job = jobs.enqueue_index(full=body.full)
+    return {"job_id": job.id if job else None}
+
+
 @app.get("/api/errors", dependencies=[Depends(require_auth)])
 def api_list_errors():
     return {"groups": errors_parser.list_errors()}

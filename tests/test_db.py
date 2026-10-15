@@ -21,8 +21,7 @@ def _tmp_db() -> str:
 
 
 def _fresh_process_state(path: str) -> None:
-    """Как будто новый процесс: миграции при connect() снова проверяются."""
-    db._migrated_paths.discard(path)
+    """Раньше здесь сбрасывался кэш миграций; теперь connect() сверяет версию сам."""
 
 
 def _add_track(conn, title="Song", path=None, status="ok", **kw) -> int:
@@ -79,6 +78,18 @@ def test_failed_migration_rolls_back():
         conn.close()
     finally:
         db.MIGRATIONS[:] = saved
+
+
+def test_db_file_deleted_while_running_is_recreated():
+    path = _tmp_db()
+    with db.connect(path) as conn:
+        _add_track(conn, "x")
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(path + suffix):
+            os.remove(path + suffix)
+    with db.connect(path) as conn:
+        assert db.schema_version(conn) == db.SCHEMA_VERSION
+        assert conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0] == 0
 
 
 def test_newer_db_than_code_is_refused():

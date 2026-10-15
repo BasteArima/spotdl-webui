@@ -273,6 +273,11 @@ app/spotify_login.py OAuth-вход для Liked Songs: authorize-URL, обме�
 app/spotdl_run.py    обёртка запуска spotdl (через неё run_spotdl): скачанное — без дозапроса метаданных
 app/settings.py      реестр настроек UI (UI→env→дефолт), секреты-файлы, cookies
 app/db.py            индекс библиотеки (SQLite /conf/library.db): схема, миграции по PRAGMA user_version
+app/scanner.py       скан /music → индекс: теги (WOAS=Spotify, COMM=ролик YouTube, TSRC=ISRC) → track_ids;
+                     инкрементально по mtime+размеру; два файла с одним внешним ID → match_candidates
+                     (уровень 1). Задача очереди «index» (фоновая дорожка): при старте, после синков,
+                     POST /api/library/rescan. Исполнителей spotdl склеивает «/» — split_artists различает
+                     по исполнителю альбома (HUNTR/X). spotdl не пишет ISRC в m4a.
 app/upgrade.py       Step 2: массовый апгрейд (контроллер + воркер)
 app/static/          index.html, app.js, style.css (тёмная SPA)
 Dockerfile           самодостаточный образ (ffmpeg+spotdl+deno+git+app)
