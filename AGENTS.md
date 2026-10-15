@@ -319,6 +319,12 @@ app/static/v2/       новый UI по design/prototype.html (на «/new», э
                      точный фильтр album/album_artist/artist), views/quality.js (GET /api/v2/quality;
                      апгрейд хранит последние 20 результатов в памяти — controller.recent).
                      Иконки: спрайт встраивается в страницу при старте (ui.loadIcons), <use href="#имя">.
+                     views/activity.js — задачи, лог по клику (дописывается на лету), отмена/уборка;
+                     пакеты (job_groups) — только загрузки треков (_BATCH_KINDS), не синки/индекс.
+                     views/settings.js — разделы с полями реестра по ключам (PAGES); поле, не
+                     попавшее ни в один раздел, само уходит в «Прочее» — новая настройка в FIELDS
+                     видна сразу. Особые разделы: Spotify (приложение + вход), YouTube Music (cookies),
+                     Deezer, librespot (вход), Navidrome, доступ (смена пароля → новый токен), система.
 Dockerfile           самодостаточный образ (ffmpeg+spotdl+deno+git+app)
 .github/workflows/build.yml  CI → GHCR
 docker-compose.yml   стек для Portainer (image из GHCR), env с комментариями

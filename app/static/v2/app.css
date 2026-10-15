@@ -114,7 +114,7 @@ h2 { font-size: 19px; font-weight: 600; margin: 28px 0 10px; letter-spacing: -.0
 .dup { display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); gap: 12px; align-items: center; }
 .dup .side-a, .dup .side-b { background: var(--card2); border-radius: var(--r-sm); padding: 10px 12px; }
 .play { width: 28px; height: 28px; border-radius: 50%; border: 0; background: var(--fill); cursor: pointer; display: grid; place-items: center; flex: none; }
-.log { font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--card2); border-radius: var(--r-sm); padding: 10px 12px; margin: 0 16px 12px; white-space: pre-wrap; color: var(--text2); }
+.log { font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--card2); border-radius: var(--r-sm); padding: 10px 12px; margin: 0 16px 12px; white-space: pre-wrap; word-break: break-word; color: var(--text2); max-height: 420px; overflow: auto; }
 .pl-head { display: flex; gap: 20px; align-items: flex-end; margin-bottom: 18px; }
 .back { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); cursor: pointer; margin-bottom: 12px; font-size: 14px; background: none; border: 0; padding: 0; }
 .hide-m { }

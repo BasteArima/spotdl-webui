@@ -70,3 +70,24 @@ export function signOut() {
   setToken("");
   window.dispatchEvent(new Event("auth:lost"));
 }
+
+// файлы (cookies.txt, свой трек) — multipart, токен тот же
+export async function apiForm(path, formData) {
+  let res;
+  try {
+    res = await fetch(path, { method: "POST", body: formData, headers: headers() });
+  } catch (e) {
+    throw new ApiError("Сервер недоступен", 0);
+  }
+  if (res.status === 401) {
+    setToken("");
+    window.dispatchEvent(new Event("auth:lost"));
+    throw new ApiError("Нужно войти заново", 401);
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(data.detail || `Ошибка ${res.status}`, res.status);
+  return data;
+}
+
+// после смены пароля сервер выдаёт новый токен (старые сессии недействительны)
+export function storeToken(t) { setToken(t); }

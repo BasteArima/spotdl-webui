@@ -39,7 +39,7 @@ const VIEWS = {
   quality: () => import("./views/quality.js"),
   attention: () => import("./views/attention.js"),
   discover: () => import("./views/stub.js"),
-  activity: () => import("./views/stub.js"),
+  activity: () => import("./views/activity.js"),
   settings: () => import("./views/settings.js"),
   more: () => import("./views/more.js"),
 };

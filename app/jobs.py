@@ -1377,6 +1377,10 @@ def last_sync() -> Optional[dict]:
     return dict(entry, playlist_id=pid)
 
 
+# пакет — только загрузки треков одного плейлиста (одинаковый заголовок)
+_BATCH_KINDS = ("download", "deezer", "zotify", "upload", "fetch")
+
+
 def job_groups() -> List[dict]:
     """Агрегаты по заголовку для МНОГОэлементных групп (пакетная загрузка плейлиста):
     одна запись с прогрессом X/Y вместо кучи одинаковых строк. Считается по ВСЕМУ
@@ -1386,8 +1390,8 @@ def job_groups() -> List[dict]:
         by_title: Dict[str, List[Job]] = {}
         for jid in _jobs_order:
             j = _jobs[jid]
-            if j.kind in ("sync", "sync-all", "autosync"):
-                continue    # повторные синки с тем же заголовком — не пакет загрузок
+            if j.kind not in _BATCH_KINDS:
+                continue    # повторные синки/обновления индекса с одним заголовком — не пакет загрузок
             by_title.setdefault(j.title, []).append(j)
         groups: List[dict] = []
         for title, members in by_title.items():
