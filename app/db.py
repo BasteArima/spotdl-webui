@@ -225,6 +225,19 @@ def set_meta(conn: sqlite3.Connection, key: str, value: Optional[str]) -> None:
                  "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
 
 
+def merge_tracks(conn: sqlite3.Connection, from_id: int, into_id: int) -> None:
+    """Слить трек from_id в into_id: плейлисты и внешние ID переходят на into,
+    from удаляется (с его записью «не скачан» и кандидатами в дубли). Файл
+    from_id не трогается — это забота вызывающего (корзина и т.п.)."""
+    if from_id == into_id:
+        return
+    conn.execute("INSERT OR IGNORE INTO playlist_items(playlist_id, source_id, track_id, position, added_at) "
+                 "SELECT playlist_id, source_id, ?, position, added_at FROM playlist_items WHERE track_id = ?",
+                 (into_id, from_id))
+    conn.execute("UPDATE track_ids SET track_id = ? WHERE track_id = ?", (into_id, from_id))
+    conn.execute("DELETE FROM tracks WHERE id = ?", (from_id,))
+
+
 def stats(conn: sqlite3.Connection) -> dict:
     """Сводка для UI и отчётов: сколько треков по статусам, плейлистов, дублей."""
     by_status = {r["status"]: r["n"] for r in

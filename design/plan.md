@@ -141,7 +141,7 @@ Spotify (`WOAS`), ссылку на ролик YouTube, откуда взят з
 - [x] **1.2** Сканер `/music`: теги (mutagen) → `tracks` + `track_ids`; инкрементально по mtime;
       задача в очереди «Пересобрать индекс». Готово: 4,8 тыс. файлов индексируются, повторный
       прогон без изменений — секунды. *M*
-- [ ] **1.3** Импорт `playlists.txt`, save-файлов, `errors/*.txt` → `playlists`, `playlist_sources`,
+- [x] **1.3** Импорт `playlists.txt`, save-файлов, `errors/*.txt` → `playlists`, `playlist_sources`,
       `playlist_items`, `missing`. Готово: цифры в индексе совпадают с текущими карточками. *M*
 - [ ] **1.4** Нормализатор и сопоставление (уровни 1–4) + тесты на реальных примерах из логов
       (Hurt / Hurt (Official Video), Way Down We Go / — Live, кириллица, японские названия). *M*

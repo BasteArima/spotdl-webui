@@ -277,7 +277,11 @@ app/scanner.py       скан /music → индекс: теги (WOAS=Spotify, C
                      инкрементально по mtime+размеру; два файла с одним внешним ID → match_candidates
                      (уровень 1). Задача очереди «index» (фоновая дорожка): при старте, после синков,
                      POST /api/library/rescan. Исполнителей spotdl склеивает «/» — split_artists различает
-                     по исполнителю альбома (HUNTR/X). spotdl не пишет ISRC в m4a.
+                     по исполнителю альбома (HUNTR/X). spotdl не пишет ISRC в m4a. Файл с ID трека,
+                     который ждал как «не скачан», сливается с ним (db.merge_tracks), а не в дубли.
+app/legacy_import.py playlists.txt + *.spotdl + errors/*.txt → playlists/sources/items/missing (после
+                     каждого скана, пока синк на spotdl; пропускает неизменённые; повторяемый по legacy_id).
+                     Трек ищется по ID Spotify, потом по ISRC; иначе ряд «не скачан» (без пути).
 app/upgrade.py       Step 2: массовый апгрейд (контроллер + воркер)
 app/static/          index.html, app.js, style.css (тёмная SPA)
 Dockerfile           самодостаточный образ (ffmpeg+spotdl+deno+git+app)

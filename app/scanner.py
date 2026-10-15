@@ -195,6 +195,11 @@ def _save(conn, path: str, st, rec: dict, existing_id: Optional[int], now: float
                      "VALUES (?, ?, ?, 'tag')", (kind, value, track_id))
         owner = conn.execute("SELECT track_id FROM track_ids WHERE kind = ? AND value = ?",
                              (kind, value)).fetchone()[0]
+        if owner != track_id and conn.execute("SELECT status FROM tracks WHERE id = ?",
+                                              (owner,)).fetchone()[0] == "missing":
+            # этот трек ждал в плейлистах как «не скачан» — теперь у него есть файл
+            db.merge_tracks(conn, owner, track_id)
+            continue
         if owner != track_id:
             # два файла с одним внешним ID — почти наверняка один трек дважды.
             # Запоминаем пару в кандидаты (уровень 1 — точное совпадение по ID);
@@ -310,6 +315,25 @@ def _cli() -> None:
           f"со ссылкой Spotify {res['with_spotify']}, YouTube {res['with_youtube']}, "
           f"ISRC {res['with_isrc']} · общих ID у разных файлов {res['id_conflicts']} · "
           f"{res['seconds']} с", flush=True)
+    if "--no-import" not in sys.argv[1:]:
+        from . import legacy_import
+        try:
+            imp = legacy_import.import_legacy(force=full)
+        except Exception as e:  # noqa: BLE001
+            print(json.dumps({"ok": False, "error": f"импорт плейлистов: {type(e).__name__}: {e}"}), flush=True)
+            sys.exit(1)
+        for line in imp.pop("skipped", []):
+            print(f"[import] пропущен: {line}", flush=True)
+        t = imp["totals"]
+        reasons = t["missing_by_reason"]
+        print(f"[import] плейлистов {imp['playlists']} (новых {imp['playlists_new']}, без изменений "
+              f"{imp['playlists_unchanged']}, убрано {imp['playlists_removed']}) · в плейлистах треков "
+              f"{t['in_playlists']}: скачано {t['downloaded']}, не скачано {t['missing']} "
+              f"(нет на YouTube {reasons.get('not_found', 0)}, YouTube не отдал "
+              f"{reasons.get('download_failed', 0)}, сеть {reasons.get('network', 0)}, "
+              f"прочее {reasons.get('other', 0)}) · файлов вне плейлистов {t['files_not_in_playlists']} · "
+              f"{imp['seconds']} с", flush=True)
+        res["import"] = imp
     print(json.dumps(dict(res, ok=True)), flush=True)
 
 
