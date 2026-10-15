@@ -985,6 +985,7 @@ def _sync_locked_inner(job: Job, pl: playlists.Playlist, prog: "SyncProgress") -
         # между плейлистами (а не порвёт файлы на полузаписи).
         rc, _out = run_spotdl(job, args or sync_args(pl), kill_on_cancel=False, on_line=prog.feed)
         _finish_errors_file(job, pl.safe, ok=(rc == 0))
+    _mark_source_availability(job, pl, _out)
     summary = _sync_summary(pl.name, prog, rc)
     job.append(summary)
     print(f"[{job.id}] {summary}", flush=True)
@@ -997,6 +998,27 @@ def _sync_locked_inner(job: Job, pl: playlists.Playlist, prog: "SyncProgress") -
         job.append(f"[youtube] {prog.yt_reason}")
     prog.set_phase("done")
     _record_sync(prog, ok=(rc == 0))
+
+
+_UNAVAILABLE_MARKERS = ("Playlist not available or not accessible",)
+
+
+def _mark_source_availability(job: Job, pl: playlists.Playlist, out: List[str]) -> None:
+    """Spotify не отдаёт плейлист (персональные подборки Daily Mix / Discover
+    Weekly и закрытые) — пометить источник в индексе: он покажется во
+    «Внимании», а не будет молча падать на каждом синке."""
+    unavailable = any(any(m in ln for m in _UNAVAILABLE_MARKERS) for ln in out)
+    try:
+        from . import db
+        with db.connect() as conn:
+            conn.execute("UPDATE playlist_sources SET status = ? WHERE playlist_id = "
+                         "(SELECT id FROM playlists WHERE legacy_id = ?)",
+                         ("unavailable" if unavailable else "ok", pl.id))
+    except Exception as exc:  # noqa: BLE001 — индекс не должен ронять синк
+        print(f"[index] не удалось отметить доступность «{pl.name}»: {exc}", flush=True)
+    if unavailable:
+        job.append(f"[sync] «{pl.name}»: Spotify не отдаёт этот плейлист (персональная подборка или "
+                   "закрытый) — он отмечен во «Внимании»")
 
 
 def _sync_summary(name: str, prog: "SyncProgress", rc: int) -> str:

@@ -176,10 +176,9 @@ export function mountMissing(root, { getTracks, playlistId = null, bulkUrl = nul
     b.disabled = true;
     try {
       const r = await api("POST", bulkUrl, { source: picks.get("bulk") || "auto" });
-      const ids = r.job_ids || [];
-      const list = getTracks().filter((t) => t.status === "missing" && t.spotify_url && !jobs.has(t.id));
-      list.forEach((t, i) => { if (ids[i]) jobs.set(t.id, ids[i]); });
-      list.forEach(redraw);
+      // сервер отдаёт явное соответствие «трек → задача» (порядок строк тут ни при чём)
+      Object.entries(r.jobs || {}).forEach(([tid, jid]) => jobs.set(Number(tid), jid));
+      getTracks().filter((t) => jobs.has(t.id)).forEach(redraw);
       toast(`В очереди ${r.queued}` + (r.skipped ? ` · без ссылки Spotify ${r.skipped}` : ""));
       pokeSoon();
     } catch (ex) { toast(ex.message); }

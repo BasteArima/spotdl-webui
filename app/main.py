@@ -351,13 +351,59 @@ def api_v2_playlist_fetch_missing(playlist_id: int, body: FetchIn):
             "SELECT DISTINCT t.id FROM playlist_items pi JOIN tracks t ON t.id = pi.track_id "
             "WHERE pi.playlist_id = ? AND t.status = 'missing'", (playlist_id,))]
         items = [library_queries.track_for_fetch(conn, i, playlist_id) for i in ids]
-    jobs_out, skipped = [], 0
+    by_track, skipped = {}, 0
     for t in items:
         if not t or not t["spotify_url"]:
             skipped += 1
             continue
-        jobs_out.append(_enqueue_fetch(t, body.source, bulk=True).id)
-    return {"queued": len(jobs_out), "skipped": skipped, "job_ids": jobs_out}
+        by_track[t["id"]] = _enqueue_fetch(t, body.source, bulk=True).id
+    return {"queued": len(by_track), "skipped": skipped, "jobs": by_track}
+
+
+@app.get("/api/v2/attention", dependencies=[Depends(require_auth)])
+def api_v2_attention():
+    from . import db, library_queries
+    with db.connect() as conn:
+        data = library_queries.attention(conn)
+    data["caps"] = _fetch_caps()
+    return data
+
+
+@app.post("/api/v2/attention/fetch-missing", dependencies=[Depends(require_auth)])
+def api_v2_attention_fetch_missing(body: FetchIn):
+    """Все недостающие треки библиотеки — выбранным источником (auto/deezer/spotify)."""
+    from . import db, library_queries
+    if body.source not in ("auto", "deezer", "spotify"):
+        raise HTTPException(status_code=400, detail="Для всех сразу — Авто, Deezer или Spotify")
+    with db.connect() as conn:
+        ids = [r[0] for r in conn.execute("SELECT id FROM tracks WHERE status = 'missing'")]
+        items = [library_queries.track_for_fetch(conn, i) for i in ids]
+    by_track, skipped = {}, 0
+    for t in items:
+        if not t or not t["spotify_url"]:
+            skipped += 1
+            continue
+        by_track[t["id"]] = _enqueue_fetch(t, body.source, bulk=True).id
+    return {"queued": len(by_track), "skipped": skipped, "jobs": by_track}
+
+
+class DupeDecisionIn(BaseModel):
+    decision: str                   # same — одна запись; different — разные треки
+
+
+@app.post("/api/v2/dupes/{cand_id}", dependencies=[Depends(require_auth)])
+def api_v2_dupe_decision(cand_id: int, body: DupeDecisionIn):
+    """Решение по паре. «same» пока только запоминается: склеивать файлы безопасно,
+    когда m3u собирает сам сервис (design/plan.md, этап 3), — тогда решения применятся."""
+    from . import db
+    if body.decision not in ("same", "different"):
+        raise HTTPException(status_code=400, detail="Решение: same или different")
+    with db.connect() as conn:
+        cur = conn.execute("UPDATE match_candidates SET decision = ?, decided_at = ? WHERE id = ?",
+                           (body.decision, time.time(), cand_id))
+    if not cur.rowcount:
+        raise HTTPException(status_code=404, detail="Пара не найдена")
+    return {"ok": True}
 
 
 class RescanIn(BaseModel):

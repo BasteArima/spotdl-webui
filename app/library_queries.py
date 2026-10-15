@@ -184,3 +184,55 @@ def track_for_fetch(conn, track_id: int, playlist_id: Optional[int] = None) -> O
             "spotify_url": f"https://open.spotify.com/track/{t['sp']}" if t["sp"] else None,
             "subject": f"{t['artist']} - {t['title']}" if t["artist"] else t["title"],
             "playlist": pl["name"] if pl else "", "youtube_url": t["yt"]}
+
+
+# ------------------------------------------------------------------ «Внимание»
+def _side(conn, t, plats: Dict[int, List[str]]) -> dict:
+    d = _track_row(t, plats)
+    d.update(path=t["path"], isrc=t["isrc"], album_artist=t["album_artist"])
+    d["playlists"] = [r[0] for r in conn.execute(
+        "SELECT DISTINCT p.name FROM playlist_items pi JOIN playlists p ON p.id = pi.playlist_id "
+        "WHERE pi.track_id = ? ORDER BY p.position", (t["id"],))]
+    return d
+
+
+def attention(conn) -> dict:
+    """Всё, что требует решения: недокачанные (с плейлистом и причиной),
+    возможные дубли без решения, недоступные источники."""
+    rows = conn.execute(
+        "SELECT t.*, m.reason AS m_reason, m.detail AS m_detail, m.source_url AS m_url, "
+        "(SELECT value FROM track_ids WHERE track_id = t.id AND kind = 'spotify') AS spotify_id, "
+        "(SELECT p.name FROM playlist_items pi JOIN playlists p ON p.id = pi.playlist_id "
+        " WHERE pi.track_id = t.id ORDER BY p.position LIMIT 1) AS playlist, "
+        "(SELECT p.id FROM playlist_items pi JOIN playlists p ON p.id = pi.playlist_id "
+        " WHERE pi.track_id = t.id ORDER BY p.position LIMIT 1) AS playlist_id "
+        "FROM tracks t LEFT JOIN missing m ON m.track_id = t.id WHERE t.status = 'missing' "
+        "ORDER BY playlist, t.title").fetchall()
+    missing = []
+    for t in rows:
+        d = _track_row(t, {})
+        d.update(spotify_url=f"https://open.spotify.com/track/{t['spotify_id']}" if t["spotify_id"] else None,
+                 isrc=t["isrc"], playlist=t["playlist"], playlist_id=t["playlist_id"],
+                 missing={"reason": t["m_reason"] or "other", "detail": t["m_detail"] or "", "source_url": t["m_url"]})
+        d.pop("platforms", None)
+        missing.append(d)
+
+    cands = conn.execute(
+        "SELECT * FROM match_candidates WHERE decision IS NULL ORDER BY level, score DESC, id").fetchall()
+    tids = sorted({c["track_a"] for c in cands} | {c["track_b"] for c in cands})
+    plats = track_platforms(conn, tids)
+    by_id = {t["id"]: t for t in conn.execute(
+        f"SELECT * FROM tracks WHERE id IN ({','.join('?' for _ in tids) or 'NULL'})", tids)}
+    dupes = []
+    for c in cands:
+        a, b = by_id.get(c["track_a"]), by_id.get(c["track_b"])
+        if not a or not b:
+            continue
+        dupes.append({"id": c["id"], "level": c["level"], "score": c["score"], "reason": c["reason"],
+                      "a": _side(conn, a, plats), "b": _side(conn, b, plats)})
+    decided_same = conn.execute("SELECT COUNT(*) FROM match_candidates WHERE decision = 'same'").fetchone()[0]
+
+    unavailable = [dict(r) for r in conn.execute(
+        "SELECT p.id, p.name, ps.kind, ps.ref FROM playlist_sources ps JOIN playlists p ON p.id = ps.playlist_id "
+        "WHERE ps.status = 'unavailable' ORDER BY p.position")]
+    return {"missing": missing, "dupes": dupes, "dupes_pending_merge": decided_same, "unavailable": unavailable}

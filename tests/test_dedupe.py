@@ -153,6 +153,43 @@ def test_playlist_queries_and_fetch_api():
         jobs.enqueue_download_one, jobs.enqueue_auto = orig
 
 
+def test_attention_unavailable_and_decisions():
+    from fastapi.testclient import TestClient
+    from app import jobs, library_queries, main, playlists
+    _build()
+    scanner.scan()
+    legacy_import.import_legacy()
+    dedupe.find_duplicates()
+    pl = next(p for p in playlists.read_playlists() if p.name == "Для работы")
+    job = jobs.Job("sync", "t", lambda j: None)
+    jobs._mark_source_availability(job, pl, ["An error occurred", "SpotifyException: Playlist not available or not accessible, make sure it is public."])
+    assert any("отмечен во «Внимании»" in ln for ln in job.log), job.log
+    with db.connect() as conn:
+        att = library_queries.attention(conn)
+    assert [u["name"] for u in att["unavailable"]] == ["Для работы"], att["unavailable"]
+    assert len(att["missing"]) == 3 and all(t["playlist"] for t in att["missing"]), att["missing"]
+    assert len(att["dupes"]) == 3 and att["dupes"][0]["a"]["path"], att["dupes"]
+
+    # повторный скан/импорт не снимает пометку и не возвращает решённые пары
+    c = TestClient(main.app)
+    cid = att["dupes"][0]["id"]
+    assert c.post(f"/api/v2/dupes/{cid}", json={"decision": "same"}).status_code == 200
+    assert c.post(f"/api/v2/dupes/{cid}", json={"decision": "maybe"}).status_code == 400
+    assert c.post("/api/v2/dupes/999999", json={"decision": "different"}).status_code == 404
+    scanner.scan(full=True)
+    legacy_import.import_legacy(force=True)
+    dedupe.find_duplicates()
+    with db.connect() as conn:
+        att2 = library_queries.attention(conn)
+    assert [u["name"] for u in att2["unavailable"]] == ["Для работы"], att2["unavailable"]
+    assert len(att2["dupes"]) == 2 and att2["dupes_pending_merge"] == 1, (len(att2["dupes"]), att2["dupes_pending_merge"])
+
+    # успешный синк снимает пометку
+    jobs._mark_source_availability(jobs.Job("sync", "t", lambda j: None), pl, ["Found 6 songs"])
+    with db.connect() as conn:
+        assert library_queries.attention(conn)["unavailable"] == []
+
+
 def test_spotdl_silent_failure_is_not_success():
     from app import jobs
     silent = ["Processing query: a|b", "Error occurred while reinitializing song: 'uri'"]

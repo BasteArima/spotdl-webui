@@ -158,8 +158,8 @@ def _import_playlist(conn, pl, position: int, now: float, report: dict) -> None:
             "source_url = COALESCE(excluded.source_url, missing.source_url)",
             (tid, reason, detail, yt))
     result = dict(st, at=now)
-    conn.execute("UPDATE playlist_sources SET last_result = ?, status = 'ok' WHERE id = ?",
-                 (json.dumps(result), sid))
+    # status (ok / unavailable) ставит синк по ответу площадки — импорт его не трогает
+    conn.execute("UPDATE playlist_sources SET last_result = ? WHERE id = ?", (json.dumps(result), sid))
     for k in ("tracks", "linked", "missing", "unexplained"):
         report[k] += st[k]
 

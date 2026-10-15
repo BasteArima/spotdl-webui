@@ -308,6 +308,12 @@ app/static/v2/       новый UI по design/prototype.html (на «/new», э
                      «Авто» = jobs.enqueue_auto: Deezer по ISRC → Spotify напрямую. Экраны перечитывают
                      данные, когда store видит новое завершённое обновление индекса (а не «очередь
                      затихла» — скан короче интервала опроса).
+                     views/attention.js — не скачано / дубли / источники. Решение «same» по дублю
+                     пока только запоминается (match_candidates.decision): склеивать файлы
+                     безопасно, когда m3u собирает сервис (этап 3), до того m3u spotdl сослался бы
+                     на ушедший в корзину файл. Источник «unavailable» ставит синк по ответу
+                     Spotify «Playlist not available» (jobs._mark_source_availability); импорт
+                     статус источника не трогает.
 Dockerfile           самодостаточный образ (ffmpeg+spotdl+deno+git+app)
 .github/workflows/build.yml  CI → GHCR
 docker-compose.yml   стек для Portainer (image из GHCR), env с комментариями
