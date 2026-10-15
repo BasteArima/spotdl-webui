@@ -272,6 +272,7 @@ app/gen_zotify_creds.py то же из консоли (запасной вари
 app/spotify_login.py OAuth-вход для Liked Songs: authorize-URL, обмен code (--exchange), CLI
 app/spotdl_run.py    обёртка запуска spotdl (через неё run_spotdl): скачанное — без дозапроса метаданных
 app/settings.py      реестр настроек UI (UI→env→дефолт), секреты-файлы, cookies
+app/db.py            индекс библиотеки (SQLite /conf/library.db): схема, миграции по PRAGMA user_version
 app/upgrade.py       Step 2: массовый апгрейд (контроллер + воркер)
 app/static/          index.html, app.js, style.css (тёмная SPA)
 Dockerfile           самодостаточный образ (ffmpeg+spotdl+deno+git+app)
@@ -283,6 +284,12 @@ docs/                installation / configuration / sources / troubleshooting / 
 ```
 
 ## 12. Состояние / возможные следующие задачи
+
+- **Идёт переделка по [design/plan.md](design/plan.md)** (согласована с пользователем):
+  сервис ведёт библиотеку сам (индекс SQLite), площадки — источники списков, spotdl —
+  один из загрузчиков; YouTube Music, склейка дублей между площадками, единый поиск,
+  новый UI по [design/prototype.html](design/prototype.html). Задачи — чекбоксы в плане;
+  отмечать выполненные там же. Миграции `app/db.py`: только дописывать новые в конец.
 
 - Сделано: все источники, анти-бан (real-time+пауза), Step 2 с долгоживущим воркером,
   резолв битых имён, фиксы из code-review.

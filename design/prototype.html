@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Музыка — прототип</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+<style>
+/* Прототип нового интерфейса. Данные выдуманные, ничего не скачивает.
+   Тема: системная, либо принудительно через data-theme на <html>. */
+:root {
+  --bg: #f5f5f7; --card: #ffffff; --card2: #fafafa; --fill: rgba(118,118,128,.12); --fill2: rgba(118,118,128,.20);
+  --text: #1d1d1f; --text2: #6e6e73; --text3: #a1a1a6; --sep: rgba(60,60,67,.12);
+  --accent: #1f8f4e; --accent-soft: rgba(31,143,78,.12); --on-accent: #fff;
+  --orange: #c2600a; --orange-soft: rgba(255,149,0,.14); --red: #d70015; --red-soft: rgba(255,59,48,.12);
+  --blue: #0066cc; --blue-soft: rgba(0,122,255,.12);
+  --spotify: #1db954; --ytm: #ff0033; --deezer: #a238ff; --manual: #8e8e93;
+  --shadow: 0 1px 2px rgba(0,0,0,.04), 0 2px 12px rgba(0,0,0,.05);
+  --r: 12px; --r-sm: 8px;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f0f11; --card: #1c1c1e; --card2: #232326; --fill: rgba(118,118,128,.24); --fill2: rgba(118,118,128,.34);
+  --text: #f5f5f7; --text2: #a1a1a6; --text3: #6e6e73; --sep: rgba(255,255,255,.09);
+  --accent: #30d158; --accent-soft: rgba(48,209,88,.16); --on-accent: #0b2a15;
+  --orange: #ff9f0a; --orange-soft: rgba(255,159,10,.16); --red: #ff453a; --red-soft: rgba(255,69,58,.16);
+  --blue: #409cff; --blue-soft: rgba(10,132,255,.18);
+  --shadow: none; color-scheme: dark;
+} }
+:root[data-theme="dark"] {
+  --bg: #0f0f11; --card: #1c1c1e; --card2: #232326; --fill: rgba(118,118,128,.24); --fill2: rgba(118,118,128,.34);
+  --text: #f5f5f7; --text2: #a1a1a6; --text3: #6e6e73; --sep: rgba(255,255,255,.09);
+  --accent: #30d158; --accent-soft: rgba(48,209,88,.16); --on-accent: #0b2a15;
+  --orange: #ff9f0a; --orange-soft: rgba(255,159,10,.16); --red: #ff453a; --red-soft: rgba(255,69,58,.16);
+  --blue: #409cff; --blue-soft: rgba(10,132,255,.18);
+  --shadow: none; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 var(--font); -webkit-font-smoothing: antialiased; }
+button { font: inherit; color: inherit; }
+a { color: var(--blue); text-decoration: none; }
+.i { font-size: 18px; line-height: 1; vertical-align: -3px; }
+
+/* --- каркас --- */
+.app { display: flex; min-height: 100vh; }
+.side { width: 232px; flex: none; position: sticky; top: 0; height: 100vh; padding: 18px 12px; display: flex; flex-direction: column; gap: 2px; border-right: 1px solid var(--sep); background: var(--bg); }
+.brand { display: flex; align-items: center; gap: 10px; padding: 4px 10px 18px; font-weight: 600; font-size: 17px; }
+.brand .logo { width: 30px; height: 30px; border-radius: 8px; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; }
+.nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--r-sm); color: var(--text); cursor: pointer; border: 0; background: none; text-align: left; width: 100%; }
+.nav-item:hover { background: var(--fill); }
+.nav-item.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.nav-item .count { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--orange); background: var(--orange-soft); padding: 1px 7px; border-radius: 10px; }
+.side .grow { flex: 1; }
+.side-status { font-size: 12px; color: var(--text2); padding: 10px; border-radius: var(--r-sm); background: var(--fill); }
+.main { min-width: 0; padding: 26px 32px 60px; max-width: 1080px; margin: 0 auto; }
+.topbar { display: none; }
+.tabbar { display: none; }
+
+h1 { font-size: 28px; font-weight: 700; letter-spacing: -.02em; margin: 0 0 4px; }
+h2 { font-size: 19px; font-weight: 600; margin: 28px 0 10px; letter-spacing: -.01em; }
+.sub { color: var(--text2); margin: 0 0 18px; }
+.muted { color: var(--text2); } .small { font-size: 13px; } .tiny { font-size: 12px; }
+
+/* --- элементы --- */
+.card { background: var(--card); border-radius: var(--r); box-shadow: var(--shadow); }
+.pad { padding: 16px 18px; }
+.grid { display: grid; gap: 12px; }
+.g3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.g2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.row { display: flex; align-items: center; gap: 12px; }
+.list > .li { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--sep); min-height: 54px; }
+.list > .li:first-child { border-top: 0; }
+.li .grow, .grow { flex: 1; min-width: 0; }
+.ellip { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.li.click { cursor: pointer; } .li.click:hover { background: var(--fill); }
+.btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; border-radius: 16px; border: 0; background: var(--fill); cursor: pointer; font-size: 14px; font-weight: 500; white-space: nowrap; }
+.btn:hover { background: var(--fill2); }
+.btn.primary { background: var(--accent); color: var(--on-accent); }
+.btn.primary:hover { filter: brightness(1.06); }
+.btn.tinted { background: var(--accent-soft); color: var(--accent); }
+.btn.sm { height: 28px; padding: 0 11px; font-size: 13px; }
+.btn.icon { width: 32px; padding: 0; justify-content: center; }
+.btn.ghost { background: none; color: var(--accent); }
+.btn.ghost:hover { background: var(--accent-soft); }
+.btn.done { background: var(--accent-soft); color: var(--accent); cursor: default; }
+.chip { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500; padding: 2px 8px; border-radius: 10px; background: var(--fill); color: var(--text2); white-space: nowrap; }
+.chip.ok { background: var(--accent-soft); color: var(--accent); }
+.chip.warn { background: var(--orange-soft); color: var(--orange); }
+.chip.err { background: var(--red-soft); color: var(--red); }
+.chip.info { background: var(--blue-soft); color: var(--blue); }
+.src { width: 18px; height: 18px; border-radius: 5px; display: inline-grid; place-items: center; color: #fff; font-size: 12px; flex: none; }
+.src.spotify { background: var(--spotify); } .src.ytm { background: var(--ytm); } .src.deezer { background: var(--deezer); } .src.manual { background: var(--manual); }
+.srcs { display: inline-flex; gap: 3px; }
+.cover { width: 44px; height: 44px; border-radius: 7px; flex: none; display: grid; place-items: center; color: rgba(255,255,255,.9); font-weight: 600; font-size: 15px; }
+.cover.lg { width: 132px; height: 132px; border-radius: 12px; font-size: 40px; }
+.cover.md { width: 56px; height: 56px; border-radius: 9px; }
+.bar { height: 6px; border-radius: 3px; background: var(--fill); overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--accent); border-radius: 3px; transition: width .4s; }
+.search { display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 16px; border-radius: 22px; background: var(--card); box-shadow: var(--shadow); border: 1px solid var(--sep); }
+.search input { flex: 1; border: 0; outline: 0; background: none; font: inherit; font-size: 16px; color: var(--text); min-width: 0; }
+.search input::placeholder { color: var(--text3); }
+.seg { display: inline-flex; padding: 2px; border-radius: 9px; background: var(--fill); gap: 2px; }
+.seg button { white-space: nowrap; border: 0; background: none; padding: 5px 14px; border-radius: 7px; cursor: pointer; font-size: 13px; font-weight: 500; color: var(--text); }
+.seg button.on { background: var(--card); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+.stat .n { font-size: 26px; font-weight: 700; letter-spacing: -.02em; }
+.toggle { width: 44px; height: 26px; border-radius: 13px; background: var(--fill2); position: relative; cursor: pointer; border: 0; flex: none; }
+.toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: left .2s; }
+.toggle.on { background: var(--accent); } .toggle.on::after { left: 20px; }
+.field { height: 34px; border-radius: var(--r-sm); border: 1px solid var(--sep); background: var(--card2); padding: 0 10px; font: inherit; color: var(--text); width: 100%; }
+.section-label { font-size: 13px; color: var(--text2); text-transform: none; margin: 22px 4px 6px; }
+.empty { text-align: center; padding: 40px 20px; color: var(--text2); }
+.toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(20px); opacity: 0; background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 20px; font-size: 14px; transition: .25s; pointer-events: none; z-index: 50; }
+.toast.show { opacity: 1; transform: translateX(-50%); }
+.spin { animation: spin 1s linear infinite; display: inline-block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.hl { background: var(--orange-soft); border-radius: 3px; }
+.dup { display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); gap: 12px; align-items: center; }
+.dup .side-a, .dup .side-b { background: var(--card2); border-radius: var(--r-sm); padding: 10px 12px; }
+.play { width: 28px; height: 28px; border-radius: 50%; border: 0; background: var(--fill); cursor: pointer; display: grid; place-items: center; flex: none; }
+.log { font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--card2); border-radius: var(--r-sm); padding: 10px 12px; margin: 0 16px 12px; white-space: pre-wrap; color: var(--text2); }
+.pl-head { display: flex; gap: 20px; align-items: flex-end; margin-bottom: 18px; }
+.back { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); cursor: pointer; margin-bottom: 12px; font-size: 14px; background: none; border: 0; padding: 0; }
+.hide-m { }
+.select { height: 28px; border-radius: 14px; border: 0; background: var(--fill); color: var(--text); font: inherit; font-size: 13px; padding: 0 10px; cursor: pointer; }
+.miss-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.miss-hint { flex-basis: 100%; padding-left: 56px; margin-top: -2px; }
+
+/* --- телефон --- */
+@media (max-width: 860px) {
+  .side { display: none; }
+  .main { padding: 8px 16px 96px; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px 4px; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  .topbar .t { font-weight: 600; }
+  .tabbar { display: flex; position: fixed; bottom: 0; left: 0; right: 0; background: color-mix(in srgb, var(--card) 88%, transparent); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-top: 1px solid var(--sep); padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); z-index: 10; }
+  .tabbar button { flex: 1; border: 0; background: none; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 10.5px; color: var(--text2); cursor: pointer; padding: 4px 0; position: relative; }
+  .tabbar button .i { font-size: 23px; }
+  .tabbar button.on { color: var(--accent); }
+  .tabbar .dot { position: absolute; top: 2px; left: calc(50% + 8px); min-width: 16px; height: 16px; border-radius: 8px; background: var(--orange); color: #fff; font-size: 10px; font-weight: 700; display: grid; place-items: center; padding: 0 4px; }
+  h1 { font-size: 26px; }
+  .g3 { grid-template-columns: 1fr; }
+  .g2 { grid-template-columns: 1fr; }
+  .hide-m { display: none !important; }
+  .cover.lg { width: 96px; height: 96px; font-size: 30px; }
+  .pl-head { gap: 14px; }
+  .dup { grid-template-columns: 1fr; }
+  .dup .vs { justify-self: center; transform: rotate(90deg); }
+  .list > .li { padding: 10px 14px; }
+  .miss-actions { flex-basis: 100%; justify-content: flex-start; padding-left: 0; }
+  .miss-hint { padding-left: 0; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><div class="logo"><i class="ti ti-music i"></i></div>Музыка</div>
+    <div id="nav"></div>
+    <div class="grow"></div>
+    <div class="side-status" id="side-status"></div>
+  </aside>
+  <div style="flex:1;min-width:0">
+    <div class="topbar"><span class="t" id="top-title">Главная</span><button class="btn icon sm" onclick="go('settings')" aria-label="Настройки"><i class="ti ti-settings i"></i></button></div>
+    <main class="main" id="main"></main>
+  </div>
+</div>
+<nav class="tabbar" id="tabbar"></nav>
+<div class="toast" id="toast"></div>
+
+<script>
+// ---------------------------------------------------------------- данные (выдуманные)
+const SRC = {
+  spotify: { name: "Spotify", icon: "ti-brand-spotify" },
+  ytm: { name: "YouTube Music", icon: "ti-brand-youtube" },
+  deezer: { name: "Deezer", icon: "ti-music" },
+  manual: { name: "Вручную", icon: "ti-upload" },
+};
+const COLORS = ["#5e5ce6","#bf5af2","#ff375f","#ff9f0a","#30b0c7","#34c759","#0a84ff","#ac8e68","#64d2ff","#ff6961"];
+function coverColor(s) { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) >>> 0; return COLORS[h % COLORS.length]; }
+
+const PLAYLISTS = [
+  { id: "liked-sp", name: "Любимые", sources: [{ t: "spotify", label: "Liked Songs" }], total: 806, have: 748, missing: 57, last: "сегодня в 04:12", auto: true },
+  { id: "liked-yt", name: "Понравившиеся", sources: [{ t: "ytm", label: "Понравившиеся" }], total: 412, have: 377, missing: 6, shared: 291, last: "сегодня в 04:31", auto: true },
+  { id: "work", name: "Для работы", sources: [{ t: "spotify", label: "Productive Music For Work" }, { t: "ytm", label: "work" }], total: 96, have: 95, missing: 1, shared: 11, last: "вчера", auto: true },
+  { id: "eva", name: "Evangelion | OST, opening & endings", sources: [{ t: "spotify", label: "плейлист" }], total: 437, have: 212, missing: 0, syncing: 212, last: "идёт синк" },
+  { id: "nier", name: "NieR:Automata OST", sources: [{ t: "spotify", label: "плейлист" }], total: 102, have: 99, missing: 3, last: "вчера" },
+  { id: "ambient", name: "dark ambient music", sources: [{ t: "spotify", label: "плейлист" }], total: 866, have: 851, missing: 15, last: "вчера" },
+  { id: "lofi", name: "lofi cafe", sources: [{ t: "spotify", label: "плейлист" }, { t: "ytm", label: "lofi" }], total: 171, have: 171, missing: 0, shared: 23, last: "вчера" },
+  { id: "arcane", name: "Arcane — Season 2", sources: [{ t: "spotify", label: "альбом" }], total: 23, have: 23, missing: 0, last: "вчера" },
+  { id: "daily", name: "Daily Mix 1", sources: [{ t: "spotify", label: "подборка Spotify" }], total: 0, have: 0, unavailable: true, last: "не синхронизируется" },
+];
+const TRACKS = [
+  { t: "Highway to the Stars", a: "Kai Engel", al: "Sustains", d: "4:12", src: ["spotify", "ytm"], q: "mp3 320k" },
+  { t: "Awake", a: "Tycho", al: "Awake", d: "4:43", src: ["ytm"], q: "mp3 256k", note: "совпал с «lofi cafe» по ISRC" },
+  { t: "Weightless", a: "Marconi Union", al: "Weightless", d: "8:09", src: ["spotify"], q: "mp3 320k" },
+  { t: "Intro", a: "The xx", al: "xx", d: "2:07", src: ["spotify", "ytm"], q: "mp3 320k" },
+  { t: "Midnight City", a: "M83", al: "Hurry Up, We're Dreaming", d: "4:03", src: ["spotify"], q: "mp3 160k", upgrade: true },
+  { t: "Opus 23", a: "Dustin O'Halloran", al: "Lumiere", d: "3:21", src: ["spotify"], q: "—", missing: true },
+  { t: "Nuvole Bianche", a: "Ludovico Einaudi", al: "Una Mattina", d: "5:57", src: ["ytm"], q: "mp3 256k" },
+  { t: "Time", a: "Hans Zimmer", al: "Inception", d: "4:35", src: ["spotify", "ytm"], q: "mp3 320k" },
+  { t: "Experience", a: "Ludovico Einaudi", al: "In a Time Lapse", d: "5:15", src: ["spotify"], q: "mp3 320k" },
+  { t: "lofi beat (unknown upload)", a: "beats4you", al: "—", d: "2:58", src: ["ytm"], q: "opus 160k", dupq: true },
+];
+const MISSING = [
+  { t: "Opus 23", a: "Dustin O'Halloran", pl: "Для работы", why: "нет на YouTube Music", deezer: true, len: "3 мин" },
+  { t: "Legacy (DMC5 Main Theme)", a: "Kota Suzuki", pl: "Любимые", why: "нет на YouTube Music", deezer: true },
+  { t: "Symphonicsuite (AoT) Part 2", a: "Sawano Hiroyuki", pl: "Любимые", why: "нет на YouTube Music", deezer: false },
+  { t: "Nine", a: "Yutaka Yamada", pl: "Любимые", why: "нет на YouTube Music", deezer: true },
+  { t: "Шелкопряд", a: "Flëur", pl: "Любимые", why: "сбой сети — повторится при синке", retry: true },
+];
+const DUPES = [
+  { a: { t: "lofi beat (unknown upload)", ar: "beats4you", src: "ytm", d: "2:58", q: "opus 160k" }, b: { t: "Affection", ar: "Jinsang", src: "spotify", d: "2:57", q: "mp3 320k" }, score: 97, why: "звук совпадает на 97%" },
+  { a: { t: "Hurt (Official Video)", ar: "Johnny Cash", src: "ytm", d: "3:38", q: "opus 160k" }, b: { t: "Hurt", ar: "Johnny Cash", src: "spotify", d: "3:38", q: "mp3 320k" }, score: 91, why: "название и длительность" },
+  { a: { t: "Way down We Go", ar: "KALEO", src: "ytm", d: "3:39", q: "opus 160k" }, b: { t: "Way Down We Go — Live", ar: "KALEO", src: "spotify", d: "4:11", q: "mp3 320k" }, score: 64, why: "похожее название, длительность другая" },
+];
+const JOBS = [
+  { title: "Синк «Evangelion | OST, opening & endings»", sub: "212 из 437 · скачано 18 · уже было 194", state: "run", time: "сейчас", log: "spotdl sync https://open.spotify.com/playlist/3FZR…\nFound 437 songs in Evangelion | OST\nDownloaded \"Shiro SAGISU - Decisive Battle\"\nDownloaded \"Yoko Takahashi - A Cruel Angel's Thesis\"" },
+  { title: "Автосинк всех плейлистов", sub: "52 плейлиста · скачано 41 · не найдено 3", state: "ok", time: "сегодня 04:00–04:38", log: "[итог] «Любимые»: всего 806 · скачано 4 · уже было 745 · не найдено 57\n[итог] «Понравившиеся»: всего 412 · скачано 9 · совпало с библиотекой 291\n[итог] «dark ambient music»: всего 866 · скачано 2 · уже было 849 · не найдено 15" },
+  { title: "Deezer · Kota Suzuki — Legacy", sub: "не нашлось на Deezer по ISRC", state: "err", time: "вчера 21:14", log: "Поиск по ISRC JPU901900123…\nНет совпадений, поиск по названию…\nНичего не найдено" },
+  { title: "Скачано из поиска · Weight of the World", sub: "Deezer · mp3 320k", state: "ok", time: "вчера 20:02", log: "Deezer: 壊レタ世界ノ歌 — Keiichi Okabe\nСохранено: Keiichi Okabe/NieR Automata OST/12 - Weight of the World.mp3" },
+  { title: "Пересканирование Navidrome", sub: "после синка", state: "ok", time: "вчера 20:05", log: "startScan → ok" },
+];
+
+// ---------------------------------------------------------------- состояние
+const state = { view: "home", pl: null, q: "", searchTab: "all", libTab: "tracks", attnTab: "missing", resolved: new Set(), dl: {}, pick: {}, upg: "pause", setPage: null };
+
+const NAV = [
+  { id: "home", title: "Главная", icon: "ti-home" },
+  { id: "search", title: "Поиск", icon: "ti-search" },
+  { id: "playlists", title: "Плейлисты", icon: "ti-playlist" },
+  { id: "library", title: "Библиотека", icon: "ti-vinyl" },
+  { id: "quality", title: "Качество 320k", icon: "ti-arrow-big-up-lines" },
+  { id: "attention", title: "Внимание", icon: "ti-alert-circle", count: () => MISSING.length + DUPES.filter((_, i) => !state.resolved.has("d" + i)).length + 1 },
+  { id: "discover", title: "Открытия", icon: "ti-sparkles" },
+  { id: "activity", title: "Активность", icon: "ti-history" },
+  { id: "settings", title: "Настройки", icon: "ti-settings" },
+];
+const TABS = ["home", "search", "playlists", "attention", "more"];
+
+// ---------------------------------------------------------------- утилиты
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const srcIcon = (t) => `<span class="src ${t}" title="${SRC[t].name}"><i class="ti ${SRC[t].icon}"></i></span>`;
+const srcIcons = (arr) => `<span class="srcs">${arr.map(srcIcon).join("")}</span>`;
+const cover = (name, cls = "") => `<div class="cover ${cls}" style="background:${coverColor(name)}">${esc(name.replace(/[^\p{L}\p{N}]/gu, "").slice(0, 1).toUpperCase() || "♪")}</div>`;
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), 2200); }
+function go(view, extra) { if (view === "settings") state.setPage = null; state.view = view; if (extra) Object.assign(state, extra); location.hash = view + (state.pl && view === "playlist" ? "/" + state.pl : ""); render(); window.scrollTo(0, 0); }
+function dlButton(key, label = "Скачать") {
+  const s = state.dl[key];
+  if (s === "run") return `<button class="btn sm"><span class="spin"><i class="ti ti-loader-2 i"></i></span>Качаю…</button>`;
+  if (s === "done") return `<button class="btn sm done"><i class="ti ti-check i"></i>В библиотеке</button>`;
+  return `<button class="btn sm tinted" onclick="fakeDownload('${key}')"><i class="ti ti-download i"></i>${label}</button>`;
+}
+function fakeDownload(key) { state.dl[key] = "run"; render(); setTimeout(() => { state.dl[key] = "done"; render(); toast("Скачано и добавлено в библиотеку"); }, 1600); }
+
+// ---------------------------------------------------------------- навигация
+function renderNav() {
+  $("#nav").innerHTML = NAV.map((n) => {
+    const c = n.count ? n.count() : 0;
+    const on = state.view === n.id || (n.id === "playlists" && state.view === "playlist");
+    return `<button class="nav-item ${on ? "on" : ""}" onclick="go('${n.id}')"><i class="ti ${n.icon} i"></i>${n.title}${c ? `<span class="count">${c}</span>` : ""}</button>`;
+  }).join("");
+  $("#side-status").innerHTML = `<div class="row" style="gap:8px;margin-bottom:6px"><span class="spin" style="color:var(--accent)"><i class="ti ti-refresh i" style="font-size:15px"></i></span><b style="color:var(--text);font-weight:600">Синк Evangelion</b></div><div class="bar"><i style="width:49%"></i></div><div style="margin-top:6px">212 из 437 · ещё ~6 мин</div>`;
+  const att = NAV.find((n) => n.id === "attention").count();
+  const tabDef = { home: ["Главная", "ti-home"], search: ["Поиск", "ti-search"], playlists: ["Плейлисты", "ti-playlist"], attention: ["Внимание", "ti-alert-circle"], more: ["Ещё", "ti-dots"] };
+  const moreViews = ["library", "quality", "discover", "activity", "settings", "more"];
+  $("#tabbar").innerHTML = TABS.map((t) => {
+    const on = state.view === t || (t === "playlists" && state.view === "playlist") || (t === "more" && moreViews.includes(state.view));
+    return `<button class="${on ? "on" : ""}" onclick="go('${t}')"><i class="ti ${tabDef[t][1]} i"></i>${tabDef[t][0]}${t === "attention" && att ? `<span class="dot">${att}</span>` : ""}</button>`;
+  }).join("");
+  const title = (NAV.find((n) => n.id === state.view) || { title: state.view === "more" ? "Ещё" : state.view === "playlist" ? "Плейлист" : "" }).title;
+  $("#top-title").textContent = title;
+}
+
+// ---------------------------------------------------------------- экраны
+function viewHome() {
+  return `
+  <h1>Добрый вечер</h1>
+  <p class="sub">В библиотеке 4 812 треков из 3 источников · Navidrome обновлён 12 мин назад</p>
+  <div class="search" onclick="go('search')" style="cursor:text"><i class="ti ti-search i muted"></i><input placeholder="Найти трек, альбом или исполнителя — в библиотеке и на площадках" onfocus="go('search')"></div>
+
+  <h2>Сейчас</h2>
+  <div class="card list">
+    <div class="li click" onclick="go('activity')"><span class="spin" style="color:var(--accent)"><i class="ti ti-refresh i"></i></span><div class="grow"><div class="ellip">Синк «Evangelion | OST, opening & endings»</div><div class="bar" style="margin:6px 0 4px"><i style="width:49%"></i></div><div class="tiny muted">212 из 437 · скачано 18 · уже было 194 · ещё ~6 мин</div></div><i class="ti ti-chevron-right i muted"></i></div>
+    <div class="li click" onclick="go('quality')"><i class="ti ti-arrow-big-up-lines i" style="color:var(--accent)"></i><div class="grow"><div>Улучшение до 320k · ${state.upg === "run" ? "идёт" : "на паузе"}</div><div class="tiny muted">1 284 из 4 812 · улучшено 412</div></div><i class="ti ti-chevron-right i muted"></i></div>
+    <div class="li"><i class="ti ti-clock i muted"></i><div class="grow"><div>Следующий автосинк</div><div class="tiny muted">завтра в 04:00 · все 52 плейлиста</div></div></div>
+  </div>
+
+  <h2>Источники</h2>
+  <div class="grid g3">
+    ${sourceCard("spotify", "47 плейлистов", "+ Любимые · 806 треков", "вход выполнен")}
+    ${sourceCard("ytm", "6 плейлистов", "+ Понравившиеся · 412 треков", "cookies свежие")}
+    ${sourceCard("manual", "38 треков", "файлы, Deezer, из поиска", "")}
+  </div>
+
+  <h2>Требует внимания</h2>
+  <div class="card list">
+    <div class="li click" onclick="go('attention',{attnTab:'missing'})"><i class="ti ti-music-off i" style="color:var(--orange)"></i><div class="grow"><div>${MISSING.length} треков не скачались</div><div class="tiny muted">нет на YouTube Music — можно взять с Deezer или Spotify напрямую</div></div><i class="ti ti-chevron-right i muted"></i></div>
+    <div class="li click" onclick="go('attention',{attnTab:'dupes'})"><i class="ti ti-copy i" style="color:var(--orange)"></i><div class="grow"><div>${DUPES.filter((_, i) => !state.resolved.has("d" + i)).length} возможных дубля между Spotify и YouTube</div><div class="tiny muted">нужно ваше решение: один трек или разные</div></div><i class="ti ti-chevron-right i muted"></i></div>
+    <div class="li click" onclick="go('attention',{attnTab:'sources'})"><i class="ti ti-lock i" style="color:var(--red)"></i><div class="grow"><div>Подборка «Daily Mix 1» недоступна</div><div class="tiny muted">Spotify не отдаёт персональные подборки через API</div></div><i class="ti ti-chevron-right i muted"></i></div>
+  </div>
+
+  <h2>Недавно добавлено</h2>
+  <div class="card list">${TRACKS.slice(0, 4).map(trackRow).join("")}</div>`;
+}
+function sourceCard(t, big, small, status) {
+  return `<div class="card pad"><div class="row" style="gap:8px;margin-bottom:10px">${srcIcon(t)}<b style="font-weight:600" class="ellip">${SRC[t].name}</b></div><div class="stat"><div class="n">${big}</div></div><div class="small muted">${small}</div>${status ? `<div class="tiny" style="margin-top:8px;color:var(--accent)"><i class="ti ti-circle-check"></i> ${status}</div>` : ""}</div>`;
+}
+function trackRow(tr, i) {
+  const right = tr.missing ? `<span class="chip warn">не скачан</span>` : tr.dupq ? `<span class="chip warn">возможный дубль</span>` : `<span class="tiny muted hide-m">${tr.q}</span>`;
+  return `<div class="li">${cover(tr.al !== "—" ? tr.al : tr.t)}<div class="grow"><div class="ellip">${esc(tr.t)}</div><div class="tiny muted ellip">${esc(tr.a)} · ${esc(tr.al)}${tr.note ? ` · <span style="color:var(--blue)">${tr.note}</span>` : ""}</div></div>${srcIcons(tr.src)}${right}<span class="tiny muted hide-m" style="width:36px;text-align:right">${tr.d}</span></div>`;
+}
+
+function viewSearch() {
+  const q = state.q;
+  const head = `<h1>Поиск</h1><p class="sub">Сначала ваша библиотека, затем YouTube Music, Deezer и Spotify</p>
+  <div class="search"><i class="ti ti-search i muted"></i><input id="q" value="${esc(q)}" placeholder="weight of the world" oninput="state.q=this.value;renderMain(true)"> ${q ? `<button class="btn icon sm" onclick="state.q='';renderMain()" aria-label="Очистить"><i class="ti ti-x i"></i></button>` : ""}</div>`;
+  if (!q.trim()) {
+    return head + `<div class="section-label">Недавние запросы</div><div class="card list">${["weight of the world", "kaleo", "arcane season 2", "hans zimmer interstellar"].map((s) => `<div class="li click" onclick="state.q='${s}';renderMain()"><i class="ti ti-history i muted"></i><div class="grow">${s}</div><i class="ti ti-arrow-up-left i muted"></i></div>`).join("")}</div>`;
+  }
+  const hl = (s) => esc(s).replace(new RegExp("(" + q.trim().split(/\s+/).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")", "ig"), '<span class="hl">$1</span>');
+  const tabs = `<div class="seg" style="margin:16px 0 4px">${[["all", "Всё"], ["tracks", "Треки"], ["albums", "Альбомы"], ["artists", "Исполнители"]].map(([k, l]) => `<button class="${state.searchTab === k ? "on" : ""}" onclick="state.searchTab='${k}';renderMain()">${l}</button>`).join("")}</div>`;
+  const lib = `<div class="section-label">В библиотеке</div><div class="card list">
+    <div class="li">${cover("NieR")}<div class="grow"><div class="ellip">${hl("Weight of the World — English Version")}</div><div class="tiny muted">Keiichi Okabe · NieR:Automata OST · mp3 320k</div></div>${srcIcons(["spotify", "ytm"])}<button class="play" aria-label="Слушать"><i class="ti ti-player-play i" style="font-size:14px"></i></button></div></div>`;
+  const ext = `<div class="section-label">На площадках</div><div class="card list">
+    <div class="li">${cover("壊")}<div class="grow"><div class="ellip">${hl("Weight of the World — 壊レタ世界ノ歌")}</div><div class="tiny muted">Keiichi Okabe · NieR:Automata OST · 5:41</div></div><span class="chip info hide-m">лучший источник: Deezer 320k</span>${srcIcons(["deezer", "spotify", "ytm"])}${dlButton("s1")}</div>
+    <div class="li">${cover("Nouveau")}<div class="grow"><div class="ellip">${hl("Weight of the World — Nouveau-FR Version")}</div><div class="tiny muted">Keiichi Okabe · 5:52</div></div>${srcIcons(["spotify", "ytm"])}${dlButton("s2")}</div>
+    <div class="li">${cover("Piano")}<div class="grow"><div class="ellip">${hl("Weight of the World (Piano Cover)")}</div><div class="tiny muted">Animenz · 4:58 · только YouTube</div></div>${srcIcons(["ytm"])}${dlButton("s3")}</div></div>`;
+  const albums = `<div class="section-label">Альбомы</div><div class="card list">
+    <div class="li">${cover("NieR")}<div class="grow"><div class="ellip">${hl("NieR:Automata Original Soundtrack")}</div><div class="tiny muted">Keiichi Okabe · 2017 · 51 трек · <span style="color:var(--accent)">9 уже есть</span></div></div>${srcIcons(["spotify", "deezer"])}${dlButton("a1", "Скачать 42")}</div>
+    <div class="li">${cover("Arrange")}<div class="grow"><div class="ellip">NieR:Automata Arranged & Unreleased Tracks</div><div class="tiny muted">2017 · 26 треков</div></div>${srcIcons(["spotify"])}${dlButton("a2", "Скачать альбом")}</div></div>`;
+  const artists = `<div class="section-label">Исполнители</div><div class="card list">
+    <div class="li"><div class="cover" style="border-radius:50%;background:${coverColor("Keiichi")}">K</div><div class="grow"><div>Keiichi Okabe</div><div class="tiny muted">в библиотеке 34 трека</div></div><button class="btn sm">Открыть</button></div></div>`;
+  const t = state.searchTab;
+  return head + tabs + (t === "all" || t === "tracks" ? lib + ext : "") + (t === "all" || t === "albums" ? albums : "") + (t === "all" || t === "artists" ? artists : "");
+}
+
+function viewPlaylists() {
+  return `<div class="row" style="justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px"><div><h1>Плейлисты</h1><p class="sub">${PLAYLISTS.length} плейлистов · один плейлист может собираться из нескольких источников</p></div><button class="btn primary" onclick="toast('Окно добавления: ссылка Spotify, плейлист YouTube Music из списка или пустой плейлист')"><i class="ti ti-plus i"></i>Добавить</button></div>
+  <div class="card list">${PLAYLISTS.map((p) => {
+    const chip = p.unavailable ? `<span class="chip err">недоступен</span>` : p.syncing ? `<span class="chip info"><span class="spin"><i class="ti ti-loader-2"></i></span>синк ${Math.round(p.syncing / p.total * 100)}%</span>` : p.missing ? `<span class="chip warn">${p.missing} не скачано</span>` : `<span class="chip ok">всё скачано</span>`;
+    return `<div class="li click" onclick="go('playlist',{pl:'${p.id}'})">${cover(p.name, "md")}<div class="grow"><div class="ellip" style="font-weight:500">${esc(p.name)}</div><div class="tiny muted ellip">${p.sources.map((s) => SRC[s.t].name).join(" + ")} · ${p.unavailable ? "через API недоступна" : `${p.total} треков`}${p.shared ? ` · ${p.shared} общих с другими` : ""} · ${p.last}</div></div>${srcIcons(p.sources.map((s) => s.t))}${chip}<i class="ti ti-chevron-right i muted hide-m"></i></div>`;
+  }).join("")}</div>`;
+}
+
+function viewPlaylist() {
+  const p = PLAYLISTS.find((x) => x.id === state.pl) || PLAYLISTS[2];
+  const pct = p.total ? Math.round(p.have / p.total * 100) : 0;
+  const miss = MISSING.filter((m) => m.pl === p.name && !m.retry);
+  return `<button class="back" onclick="go('playlists')"><i class="ti ti-chevron-left i"></i>Плейлисты</button>
+  <div class="pl-head">${cover(p.name, "lg")}<div class="grow"><div class="tiny muted">ПЛЕЙЛИСТ</div><h1 style="margin:2px 0 6px">${esc(p.name)}</h1>
+    <div class="small muted">${p.total} треков · скачано ${p.have} · ${p.last}</div>
+    <div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap"><button class="btn primary" onclick="toast('Синк поставлен в очередь')"><i class="ti ti-refresh i"></i>Синхронизировать</button><button class="btn" onclick="toast('Открыть в Navidrome')"><i class="ti ti-external-link i"></i>В Navidrome</button><button class="btn icon" aria-label="Ещё"><i class="ti ti-dots i"></i></button></div></div></div>
+
+  <div class="grid g2">
+    <div class="card pad"><div style="font-weight:600">Откуда список треков</div><div class="tiny muted" style="margin:2px 0 8px">Сервис следит за этими плейлистами площадок и добавляет новые треки. Если трек есть в обоих — файл один.</div>
+      ${p.sources.map((s) => `<div class="row" style="padding:6px 0">${srcIcon(s.t)}<div class="grow"><div>${SRC[s.t].name}</div><div class="tiny muted">${s.label}</div></div><button class="btn sm">Изменить</button></div>`).join("")}
+      <button class="btn ghost sm" style="margin-top:6px;padding-left:0" onclick="toast('Добавить плейлист с другой площадки в этот плейлист')"><i class="ti ti-plus i"></i>Добавить источник</button></div>
+    <div class="card pad"><div style="font-weight:600">Состояние</div><div class="tiny muted" style="margin:2px 0 10px">Звук для синка берётся с YouTube Music; чего там нет — ниже, с выбором площадки.</div>
+      <div class="bar"><i style="width:${pct}%"></i></div>
+      <div class="row small" style="justify-content:space-between;margin-top:8px"><span>${pct}% скачано</span><span class="muted">${p.missing ? p.missing + " не скачано" : "всё на месте"}</span></div>
+      ${p.shared ? `<div class="small" style="margin-top:12px"><i class="ti ti-link i" style="color:var(--blue)"></i> ${p.shared} треков уже были в библиотеке из других источников — новые файлы не создавались</div>` : ""}</div>
+  </div>
+
+  ${miss.length ? `<h2>Не скачано · ${miss.length}</h2>${bulkBar("pl-" + p.id, miss)}<div class="card list">${miss.map((m) => missingRow(m, "m" + MISSING.indexOf(m))).join("")}</div>` : ""}
+
+  <div class="row" style="justify-content:space-between;margin:24px 0 10px;flex-wrap:wrap;gap:10px"><h2 style="margin:0">Треки</h2><div class="seg" style="max-width:100%;overflow-x:auto"><button class="on">Все</button><button>Не скачаны</button><button>Из 2 источников</button></div></div>
+  <div class="card list">${TRACKS.map(trackRow).join("")}</div>
+  <p class="tiny muted" style="margin-top:10px"><span class="srcs" style="vertical-align:-4px">${srcIcon("spotify")}${srcIcon("ytm")}</span> — трек есть в обоих источниках, но в библиотеке это один файл.</p>`;
+}
+
+// Откуда скачать недостающий трек. «Авто» — по порядку: Deezer по ISRC → Spotify 320k.
+const AUDIO = [["auto", "Авто"], ["deezer", "Deezer"], ["spotify", "Spotify 320k"], ["youtube", "Своя ссылка YouTube"], ["file", "Свой файл"]];
+function audioHint(m, pick) {
+  return {
+    auto: m.deezer ? "Deezer по ISRC (320k), не выйдет — Spotify 320k" : "на Deezer нет — возьмёт Spotify 320k",
+    deezer: m.deezer ? "найден по ISRC · mp3 320k · секунды" : "на Deezer этого трека нет",
+    spotify: "прямо со Spotify · 320k · со скоростью прослушивания, ~" + (m.len || "4 мин"),
+    youtube: "найдите ролик сами — «искать на YouTube ↗» — и вставьте ссылку",
+    file: "свой mp3/flac/m4a — теги и обложка подтянутся со Spotify",
+  }[pick];
+}
+function missingRow(m, key) {
+  const pick = state.pick[key] || "auto";
+  const s = state.dl[key];
+  const extra = pick === "youtube" ? `<div class="row miss-hint" style="gap:10px;flex-wrap:wrap"><input class="field" style="max-width:340px;height:30px;flex:1;min-width:180px" placeholder="https://music.youtube.com/watch?v=…"><a class="tiny" href="https://music.youtube.com/search?q=${encodeURIComponent(m.a + " " + m.t)}" target="_blank" rel="noopener">искать на YouTube ↗</a></div>`
+    : pick === "file" ? `<div class="row miss-hint" style="gap:10px"><button class="btn sm"><i class="ti ti-upload i"></i>Выбрать файл</button><span class="tiny muted">mp3, flac, m4a, opus — теги и обложка подтянутся со Spotify</span></div>` : "";
+  const select = `<select class="select" onchange="state.pick['${key}']=this.value;renderMain()">${AUDIO.map(([k, l]) => `<option value="${k}" ${k === pick ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+  const actions = s === "run" ? `<button class="btn sm"><span class="spin"><i class="ti ti-loader-2 i"></i></span>Качаю…</button>`
+    : s === "done" ? `<button class="btn sm done"><i class="ti ti-check i"></i>В библиотеке</button>`
+    : `${select}<button class="btn sm tinted" onclick="fakeDownload('${key}')"><i class="ti ti-download i"></i>Скачать</button>`;
+  return `<div class="li" style="flex-wrap:wrap">${cover(m.t)}<div class="grow"><div class="ellip">${esc(m.t)}</div><div class="tiny muted ellip">${esc(m.a)} · «${esc(m.pl)}» · ${m.why}</div></div>
+    ${m.retry ? `<span class="chip">повторится при синке</span>` : `<div class="miss-actions">${actions}</div>${s ? "" : extra || `<div class="tiny muted miss-hint">${audioHint(m, pick)}</div>`}`}</div>`;
+}
+function bulkBar(key, list) {
+  const pick = state.pick[key] || "auto";
+  const n = list.filter((m) => !m.retry).length;
+  return `<div class="card pad row" style="flex-wrap:wrap;gap:10px;margin-bottom:10px"><div class="grow" style="min-width:220px"><div style="font-weight:600">Скачать все недостающие</div><div class="tiny muted">${{ auto: "Авто: для каждого трека — Deezer по ISRC, иначе Spotify 320k", deezer: "Только Deezer: что там не найдётся, останется в списке", spotify: "Только Spotify 320k: медленно, со скоростью прослушивания и паузами" }[pick]}</div></div>
+    <div class="seg">${[["auto", "Авто"], ["deezer", "Deezer"], ["spotify", "Spotify 320k"]].map(([k, l]) => `<button class="${pick === k ? "on" : ""}" onclick="state.pick['${key}']='${k}';renderMain()">${l}</button>`).join("")}</div>
+    <button class="btn primary" onclick="${list.map((m) => `fakeDownload('m${MISSING.indexOf(m)}')`).join(";")}"><i class="ti ti-download i"></i>Скачать ${n}</button></div>`;
+}
+function viewLibrary() {
+  return `<h1>Библиотека</h1><p class="sub">4 812 треков · 1 096 исполнителей · 31,4 ГБ</p>
+  <div class="grid g3" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+    ${[["4 812", "треков"], ["3 211", "в 320k"], ["1 304", "из нескольких источников"], ["297", "можно улучшить до 320k"]].map(([n, l]) => `<div class="card pad stat"><div class="n">${n}</div><div class="small muted">${l}</div></div>`).join("")}
+  </div>
+  <div class="row" style="margin:22px 0 10px;flex-wrap:wrap;gap:10px"><div class="seg">${[["tracks", "Треки"], ["albums", "Альбомы"], ["artists", "Исполнители"]].map(([k, l]) => `<button class="${state.libTab === k ? "on" : ""}" onclick="state.libTab='${k}';renderMain()">${l}</button>`).join("")}</div>
+    <div class="search" style="height:34px;flex:1;min-width:180px;box-shadow:none"><i class="ti ti-filter i muted"></i><input placeholder="Фильтр по названию"></div>
+    <div class="seg"><button class="on">Все</button><button>${srcIcon("spotify")}</button><button>${srcIcon("ytm")}</button><button>${srcIcon("manual")}</button></div></div>
+  <div class="card list">${TRACKS.filter((t) => !t.missing).map(trackRow).join("")}</div>
+  <div class="card pad row" style="margin-top:18px;flex-wrap:wrap"><i class="ti ti-arrow-big-up-lines i" style="color:var(--accent);font-size:24px"></i><div class="grow"><b style="font-weight:600">Улучшение до 320k</b><div class="small muted">297 треков ниже 300k можно заменить версией со Spotify. Идёт медленно, со скоростью прослушивания.</div></div><button class="btn tinted" onclick="go('quality')">Открыть</button></div>`;
+}
+
+function viewAttention() {
+  const t = state.attnTab;
+  const dupLeft = DUPES.map((d, i) => ({ d, i })).filter(({ i }) => !state.resolved.has("d" + i));
+  const tabs = `<div class="seg" style="margin-bottom:16px">${[["missing", `Не скачано · ${MISSING.length}`], ["dupes", `Дубли · ${dupLeft.length}`], ["sources", "Источники · 1"]].map(([k, l]) => `<button class="${t === k ? "on" : ""}" onclick="state.attnTab='${k}';renderMain()">${l}</button>`).join("")}</div>`;
+  let body = "";
+  if (t === "missing") {
+    body = `${bulkBar("all", MISSING)}<div class="card list">${MISSING.map((m, i) => missingRow(m, "m" + i)).join("")}</div>
+    <p class="tiny muted" style="margin-top:10px">Синк плейлистов берёт звук с YouTube Music. Сюда попадает то, чего там не нашлось, — у каждого трека можно выбрать, откуда его взять.</p>`;
+  } else if (t === "dupes") {
+    body = dupLeft.length ? dupLeft.map(({ d, i }) => `<div class="card pad" style="margin-bottom:12px">
+      <div class="row" style="justify-content:space-between;margin-bottom:10px"><span class="small muted">${d.why}</span><span class="chip ${d.score >= 90 ? "ok" : "warn"}">совпадение ${d.score}%</span></div>
+      <div class="dup"><div class="side-a">${dupSide(d.a)}</div><i class="ti ti-arrows-left-right i muted vs"></i><div class="side-b">${dupSide(d.b)}</div></div>
+      <div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap"><button class="btn primary sm" onclick="resolveDup(${i},'Склеено: оставлен файл в лучшем качестве')"><i class="ti ti-link i"></i>Один трек — оставить ${d.b.q}</button><button class="btn sm" onclick="resolveDup(${i},'Оставлены оба трека')">Разные треки</button><button class="btn ghost sm" onclick="toast('Прослушать оба')"><i class="ti ti-headphones i"></i>Сравнить на слух</button></div></div>`).join("")
+      : `<div class="card empty"><i class="ti ti-circle-check" style="font-size:40px;color:var(--accent)"></i><div style="margin-top:8px">Все возможные дубли разобраны</div></div>`;
+  } else {
+    body = `<div class="card list"><div class="li">${cover("Daily Mix 1", "md")}<div class="grow"><div style="font-weight:500">Daily Mix 1</div><div class="tiny muted">Spotify собирает эту подборку лично для вас и не отдаёт её через API. Сохраните нужные треки в свой плейлист — он синкается.</div></div><button class="btn sm" onclick="toast('Плейлист удалён из списка')">Убрать</button></div></div>`;
+  }
+  return `<h1>Внимание</h1><p class="sub">То, что сервис не может решить сам</p>` + tabs + body;
+}
+function dupSide(s) { return `<div class="row" style="gap:10px">${cover(s.t)}<div class="grow"><div class="ellip">${esc(s.t)}</div><div class="tiny muted ellip">${esc(s.ar)} · ${s.d} · ${s.q}</div></div>${srcIcon(s.src)}</div>`; }
+function resolveDup(i, msg) { state.resolved.add("d" + i); render(); toast(msg); }
+
+function viewQuality() {
+  const run = state.upg === "run";
+  return `<h1>Улучшение до 320k</h1><p class="sub">Заменяет треки ниже 300 kbps версией прямо со Spotify. Идёт медленно — со скоростью прослушивания и паузами между треками, так безопаснее для аккаунта. Переживает перезапуск.</p>
+  <div class="card pad">
+    <div class="row" style="flex-wrap:wrap;gap:10px"><div class="grow"><div class="row" style="gap:8px"><b style="font-weight:600;font-size:17px">${run ? "Идёт" : "На паузе"}</b><span class="chip ${run ? "ok" : ""}">${run ? "сейчас: M83 — Midnight City" : "продолжит с места остановки"}</span></div>
+      <div class="small muted" style="margin-top:2px">1 284 из 4 812 проверено · ещё ~9 дней при текущем темпе</div></div>
+      <button class="btn ${run ? "" : "primary"}" onclick="state.upg='${run ? "pause" : "run"}';render();toast('${run ? "Апгрейд на паузе" : "Апгрейд продолжен"}')"><i class="ti ${run ? "ti-player-pause" : "ti-player-play"} i"></i>${run ? "Пауза" : "Продолжить"}</button></div>
+    <div class="bar" style="margin:14px 0 12px"><i style="width:27%"></i></div>
+    <div class="grid" style="grid-template-columns:repeat(4,minmax(0,1fr));gap:10px">${[["412", "улучшено"], ["865", "уже 300k+"], ["7", "не вышло"], ["3 528", "осталось"]].map(([n, l]) => `<div class="stat"><div class="n" style="font-size:22px">${n}</div><div class="tiny muted">${l}</div></div>`).join("")}</div>
+  </div>
+  <div class="section-label">Как идёт</div><div class="card list">
+    ${setRow("ti-shield-check", "Безопасный режим", "качать со скоростью прослушивания и паузой 5–15 с между треками", toggleHtml(true))}
+    ${setRow("ti-calendar", "Лимит в сутки", "0 — без лимита; меньше треков в день — меньше риск для аккаунта", `<input class="field" style="width:80px" value="0">`)}
+    ${setRow("ti-gauge", "Не трогать треки от", "файлы с битрейтом не ниже этого пропускаются", `<span class="row" style="gap:6px"><input class="field" style="width:70px" value="300"><span class="muted small">kbps</span></span>`)}
+  </div>
+  <div class="section-label">Последние</div><div class="card list">
+    ${[["Midnight City", "M83", "160k → 320k"], ["Hurt", "Johnny Cash", "128k → 320k"], ["Shelter", "Porter Robinson", "не вышло: трек недоступен в стране"], ["Time", "Hans Zimmer", "уже 320k — пропущен"]].map(([t, a, r]) => `<div class="li">${cover(t)}<div class="grow"><div class="ellip">${t}</div><div class="tiny muted">${a}</div></div><span class="tiny ${r.startsWith("не") ? "" : "muted"}" style="${r.startsWith("не") ? "color:var(--orange)" : ""}">${r}</span></div>`).join("")}
+  </div>
+  <p class="tiny muted" style="margin-top:10px">Риск блокировки аккаунта Spotify не нулевой — паузы и лимит его снижают, но не убирают.</p>`;
+}
+function viewDiscover() {
+  return `<h1>Открытия</h1><p class="sub">Подборки по вашим вкусам — временные: через 4 недели исчезают, лайкнутое остаётся</p>
+  <div class="grid g3">
+    ${[["Супермикс", "YouTube Music · обновлён сегодня", "ytm", "50 треков · 12 новых"], ["Открытия недели", "ListenBrainz · по прослушиваниям в Navidrome", "manual", "30 треков · все новые"], ["Радио: Keiichi Okabe", "YouTube Music · по исполнителю", "ytm", "25 треков · 18 новых"]].map(([n, s, src, c]) => `<div class="card pad">${cover(n, "lg")}<div style="font-weight:600;margin-top:12px">${n}</div><div class="tiny muted">${s}</div><div class="small" style="margin:8px 0 12px">${c}</div><button class="btn tinted sm" onclick="toast('Подборка скачивается')">Скачать новые</button></div>`).join("")}
+  </div>
+  <div class="card pad row" style="margin-top:18px"><i class="ti ti-info-circle i muted"></i><div class="small muted">Этап «позже»: в прототипе для примера. Подборки Spotify через API недоступны, поэтому здесь YouTube Music и ListenBrainz.</div></div>`;
+}
+
+function viewActivity() {
+  return `<h1>Активность</h1><p class="sub">Что сервис делал — понятными словами; подробный лог по нажатию</p>
+  <div class="card list">${JOBS.map((j, i) => `<div class="li click" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">${j.state === "run" ? `<span class="spin" style="color:var(--accent)"><i class="ti ti-refresh i"></i></span>` : j.state === "ok" ? `<i class="ti ti-circle-check i" style="color:var(--accent)"></i>` : `<i class="ti ti-alert-triangle i" style="color:var(--orange)"></i>`}<div class="grow"><div class="ellip">${esc(j.title)}</div><div class="tiny muted ellip">${esc(j.sub)}</div></div><span class="tiny muted">${j.time}</span><i class="ti ti-chevron-down i muted"></i></div><div class="log" style="display:${i === 0 ? "block" : "none"}">${esc(j.log)}</div>`).join("")}</div>`;
+}
+
+const toggleHtml = (on) => `<button class="toggle ${on ? "on" : ""}" onclick="this.classList.toggle('on')"></button>`;
+const setRow = (icon, title, sub, right) => `<div class="li"><i class="ti ${icon} i muted"></i><div class="grow"><div>${title}</div>${sub ? `<div class="tiny muted">${sub}</div>` : ""}</div>${right}</div>`;
+const sel = (opts, cur) => `<select class="select">${opts.map((o) => `<option ${o === cur ? "selected" : ""}>${o}</option>`).join("")}</select>`;
+const num = (v, unit) => `<span class="row" style="gap:6px"><input class="field" style="width:80px" value="${v}">${unit ? `<span class="muted small">${unit}</span>` : ""}</span>`;
+const txt = (ph, v = "", type = "text") => `<input class="field" type="${type}" style="width:260px;max-width:100%" placeholder="${ph}" value="${v}">`;
+
+// Все текущие настройки сервиса, разложенные по подстраницам (ничего не потеряно).
+const SETTINGS = [
+  { label: "Источники", items: [
+    { id: "spotify", icon: "ti-brand-spotify", title: "Spotify", sub: "вход выполнен · плейлисты и Любимые", chip: "подключён", body: () => `
+      <div class="section-label">Своё приложение Spotify</div><div class="card list">
+        ${setRow("ti-key", "Client ID", "из developer.spotify.com → ваше приложение", txt("32 символа", "5f57••••0293"))}
+        ${setRow("ti-lock", "Client secret", "хранится на сервере, наружу не отдаётся", txt("••••••••", "", "password"))}
+        ${setRow("ti-link", "Redirect URI", "добавьте ровно так в настройки приложения", `<code class="small">http://127.0.0.1:9900/</code>`)}
+      </div>
+      <div class="section-label">Вход (для Любимых)</div><div class="card list">
+        ${setRow("ti-user-check", "Вы вошли как Baste", "в Любимых 806 треков", `<button class="btn sm">Выйти</button>`)}
+        ${setRow("ti-refresh", "Войти заново", "ссылка → вход → вставить адрес 127.0.0.1:9900/?code=…", `<button class="btn sm tinted">Войти</button>`)}
+      </div>` },
+    { id: "ytm", icon: "ti-brand-youtube", title: "YouTube Music", sub: "cookies загружены 9 дней назад", chip: "подключён", body: () => `
+      <div class="section-label">Cookies</div><div class="card list">
+        ${setRow("ti-cookie", "cookies.txt", "загружены 9 дней назад · проверены сегодня в 04:31 — действуют", `<button class="btn sm"><i class="ti ti-upload i"></i>Загрузить новые</button>`)}
+        ${setRow("ti-info-circle", "Как выгрузить, чтобы не протухли", "приватное окно → вход в YouTube → youtube.com/robots.txt → экспорт → сразу закрыть окно", `<a class="small" href="#">Подробнее</a>`)}
+      </div>
+      <div class="section-label">Что синкать</div><div class="card list">
+        ${setRow("ti-heart", "Понравившиеся", "412 треков", toggleHtml(true))}
+        ${setRow("ti-playlist", "Плейлисты", "6 выбрано из 14", `<button class="btn sm">Выбрать</button>`)}
+        ${setRow("ti-sparkles", "Миксы (Супермикс, Открытия)", "позже: подборки площадки", toggleHtml(false))}
+      </div>` },
+    { id: "deezer", icon: "ti-music", title: "Deezer", sub: "ARL-токен · для треков, которых нет на YouTube", chip: "подключён", body: () => `
+      <div class="section-label">Deezer</div><div class="card list">
+        ${setRow("ti-key", "ARL-токен", "cookie arl с deezer.com; бесплатный аккаунт — 128k", txt("192 символа", "", "password"))}
+        ${setRow("ti-player-play", "Проверить", "последняя проверка: работает", `<button class="btn sm">Проверить</button>`)}
+      </div>` },
+    { id: "librespot", icon: "ti-player-play", title: "Spotify напрямую (320k)", sub: "вход через ваш аккаунт · медленно, безопаснее", chip: "подключён", body: () => `
+      <div class="section-label">Вход</div><div class="card list">
+        ${setRow("ti-user-check", "Вход выполнен", "через OAuth (подходит и вход через Facebook)", `<button class="btn sm">Войти заново</button>`)}
+      </div>
+      <div class="section-label">Загрузка</div><div class="card list">
+        ${setRow("ti-adjustments", "Качество", "320k нужен Premium", sel(["очень высокое (320k)", "высокое (160k)", "обычное (96k)"], "очень высокое (320k)"))}
+        ${setRow("ti-shield-check", "Безопасный режим", "одиночные загрузки тоже со скоростью прослушивания", toggleHtml(true))}
+        ${setRow("ti-hourglass", "Пауза между треками", "при массовой загрузке и апгрейде", `<span class="row" style="gap:6px">${num(5)}<span class="muted">–</span>${num(15, "с")}</span>`)}
+      </div>` },
+  ] },
+  { label: "Синхронизация и загрузка", items: [
+    { id: "autosync", icon: "ti-clock", title: "Автосинк", sub: "каждые 24 ч", body: () => `
+      <div class="section-label">Автосинк</div><div class="card list">
+        ${setRow("ti-clock", "Интервал", "0 — выключить автосинк", num(24, "ч"))}
+        ${setRow("ti-player-play", "Синк после старта контейнера", "один раз вскоре после запуска", toggleHtml(false))}
+        ${setRow("ti-hourglass", "Задержка после старта", "", num(20, "с"))}
+      </div>` },
+    { id: "youtube", icon: "ti-brand-youtube", title: "Загрузка с YouTube", sub: "качество, пауза, повторы", body: () => `
+      <div class="section-label">Звук</div><div class="card list">
+        ${setRow("ti-adjustments", "Битрейт mp3", "YouTube отдаёт ~128–160k; «как у источника» не пережимает лишний раз", sel(["как у источника", "128k", "160k", "192k", "256k", "320k"], "как у источника"))}
+        ${setRow("ti-search", "Где искать", "второй — запасной", sel(["YouTube Music", "YouTube", "YouTube Music, затем YouTube"], "YouTube Music"))}
+        ${setRow("ti-file-check", "Если файл уже скачан", "", sel(["пропустить", "обновить только теги", "перекачать"], "пропустить"))}
+      </div>
+      <div class="section-label">Чтобы YouTube не ограничивал</div><div class="card list">
+        ${setRow("ti-hourglass", "Пауза перед загрузкой при синке", "от N до 2N секунд; 0 — без пауз", num(10, "с"))}
+        ${setRow("ti-arrows-split", "Параллельных загрузок", "больше — быстрее, но выше нагрузка и риск блока", num(2))}
+        ${setRow("ti-alarm", "Таймаут на один трек", "", num(3600, "с"))}
+      </div>` },
+    { id: "lyrics", icon: "ti-align-left", title: "Тексты песен", sub: "обычные", body: () => `
+      <div class="section-label">Тексты</div><div class="card list">
+        ${setRow("ti-align-left", "Тексты песен", "вшиваются в теги", sel(["обычные (Genius, AZLyrics, Musixmatch)", "синхронизированные, иначе обычные", "не искать"], "обычные (Genius, AZLyrics, Musixmatch)"))}
+        ${setRow("ti-file-text", "Файлы .lrc рядом с треками", "Navidrome показывает их как синхронный текст", toggleHtml(false))}
+      </div>` },
+    { id: "files", icon: "ti-file-music", title: "Файлы и качество", sub: "mp3 320k", body: () => `
+      <div class="section-label">Файлы</div><div class="card list">
+        ${setRow("ti-adjustments", "Битрейт mp3 для Deezer, Spotify и своих файлов", "", sel(["128k", "192k", "256k", "320k", "как у источника"], "320k"))}
+        ${setRow("ti-copy", "Склейка дублей", "уверенные совпадения — сразу, сомнительные — в «Внимание»", sel(["авто + спрашивать", "всегда спрашивать", "выключена"], "авто + спрашивать"))}
+      </div>` },
+    { id: "quality", icon: "ti-arrow-big-up-lines", title: "Улучшение до 320k", sub: "лимит, порог, таймаут", body: () => `
+      <div class="section-label">Улучшение до 320k</div><div class="card list">
+        ${setRow("ti-gauge", "Не трогать треки от", "", num(300, "kbps"))}
+        ${setRow("ti-calendar", "Лимит в сутки", "0 — без лимита", num(0))}
+        ${setRow("ti-alarm", "Таймаут на трек", "", num(1200, "с"))}
+      </div><p class="tiny muted" style="margin:8px 4px">Запуск и пауза — в разделе «Качество 320k».</p>` },
+  ] },
+  { label: "Navidrome и клиенты", items: [
+    { id: "navidrome", icon: "ti-server", title: "Navidrome", sub: "пересканирование после изменений", chip: "подключён", body: () => `
+      <div class="section-label">Подключение</div><div class="card list">
+        ${setRow("ti-world", "Адрес", "", txt("http://navidrome:4533", "http://192.168.1.10:4533"))}
+        ${setRow("ti-user", "Пользователь", "нужен администратор", txt("admin", "admin"))}
+        ${setRow("ti-lock", "Пароль", "", txt("••••••••", "", "password"))}
+        ${setRow("ti-plug-connected", "Проверка", "версия 0.58 · администратор · последний скан 12 мин назад", `<span class="row" style="gap:6px"><button class="btn sm">Проверить</button><button class="btn sm">Скан сейчас</button></span>`)}
+      </div>
+      <div class="section-label">Пересканирование</div><div class="card list">
+        ${setRow("ti-refresh", "После синка и загрузок", "когда очередь затихнет", toggleHtml(true))}
+        ${setRow("ti-hourglass", "Не чаще чем раз в", "", num(15, "мин"))}
+      </div>` },
+    { id: "clients", icon: "ti-device-mobile", title: "Поиск в Arpeggi и других клиентах", sub: "позже", body: () => `
+      <div class="section-label">Поиск в клиентах</div><div class="card list">
+        ${setRow("ti-search", "Подмешивать результаты площадок в поиск", "клиент подключается к сервису вместо Navidrome; скачивание по нажатию", toggleHtml(false))}
+        ${setRow("ti-link", "Адрес для клиента", "", `<code class="small">http://сервер:4535/subsonic</code>`)}
+      </div>` },
+  ] },
+  { label: "Сервис", items: [
+    { id: "access", icon: "ti-lock", title: "Доступ", sub: "пароль задан", body: () => `
+      <div class="section-label">Пароль</div><div class="card list">
+        ${setRow("ti-lock", "Текущий пароль", "", txt("", "", "password"))}
+        ${setRow("ti-lock", "Новый пароль", "смена разлогинит остальные устройства", txt("", "", "password"))}
+        ${setRow("ti-calendar", "Срок входа", "", num(30, "дн"))}
+      </div><div style="margin-top:10px"><button class="btn primary">Сменить пароль</button></div>` },
+    { id: "logs", icon: "ti-history", title: "Журнал", sub: "история задач, логи", body: () => `
+      <div class="section-label">Журнал</div><div class="card list">
+        ${setRow("ti-list", "Хранить завершённых задач", "", num(400))}
+        ${setRow("ti-file-text", "Строк лога у завершённой задачи", "", num(300))}
+        ${setRow("ti-terminal", "Подробный лог spotdl", "каждая строка, в т.ч. по три на каждый уже скачанный трек", toggleHtml(false))}
+      </div>` },
+    { id: "system", icon: "ti-info-circle", title: "О системе", sub: "пути, пользователь, версии", body: () => `
+      <div class="section-label">Только чтение — задаётся в compose</div><div class="card list">
+        ${[["Данные", "/conf"], ["Музыка", "/music"], ["Шаблон имён", "{album-artist}/{album}/{track-number} - {title}"], ["Пользователь", "998:100"], ["spotdl", "4.5.0"], ["yt-dlp", "2026.03.17"]].map(([k, v]) => setRow("ti-point", k, "", `<code class="small">${v}</code>`)).join("")}
+      </div>` },
+  ] },
+];
+
+function viewSettings() {
+  const theme = document.documentElement.dataset.theme || "auto";
+  if (state.setPage) {
+    const item = SETTINGS.flatMap((g) => g.items).find((x) => x.id === state.setPage);
+    if (item) return `<button class="back" onclick="state.setPage=null;renderMain()"><i class="ti ti-chevron-left i"></i>Настройки</button><h1>${item.title}</h1>${item.body()}`;
+  }
+  return `<h1>Настройки</h1><p class="sub">Все текущие настройки сервиса — по смыслу, в подстраницах</p>
+  <div class="section-label">Внешний вид</div><div class="card list">${setRow("ti-sun-moon", "Тема", "", `<div class="seg">${[["auto", "Авто"], ["light", "Светлая"], ["dark", "Тёмная"]].map(([k, l]) => `<button class="${theme === k ? "on" : ""}" onclick="setTheme('${k}')">${l}</button>`).join("")}</div>`)}</div>
+  ${SETTINGS.map((g) => `<div class="section-label">${g.label}</div><div class="card list">${g.items.map((it) => `<div class="li click" onclick="state.setPage='${it.id}';renderMain();scrollTo(0,0)"><i class="ti ${it.icon} i muted"></i><div class="grow"><div>${it.title}</div><div class="tiny muted ellip">${it.sub}</div></div>${it.chip ? `<span class="chip ok hide-m">${it.chip}</span>` : ""}<i class="ti ti-chevron-right i muted"></i></div>`).join("")}</div>`).join("")}`;
+}
+function viewMore() {
+  const items = [["library", "Библиотека", "ti-vinyl"], ["quality", "Качество 320k", "ti-arrow-big-up-lines"], ["discover", "Открытия", "ti-sparkles"], ["activity", "Активность", "ti-history"], ["settings", "Настройки", "ti-settings"]];
+  return `<h1>Ещё</h1><div class="card list" style="margin-top:14px">${items.map(([v, t, ic]) => `<div class="li click" onclick="go('${v}')"><i class="ti ${ic} i" style="color:var(--accent)"></i><div class="grow">${t}</div><i class="ti ti-chevron-right i muted"></i></div>`).join("")}</div>`;
+}
+function setTheme(k) { if (k === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = k; try { localStorage.setItem("proto-theme", k); } catch (e) {} render(); }
+
+// ---------------------------------------------------------------- рендер
+const VIEWS = { home: viewHome, search: viewSearch, playlists: viewPlaylists, playlist: viewPlaylist, library: viewLibrary, attention: viewAttention, discover: viewDiscover, activity: viewActivity, settings: viewSettings, more: viewMore, quality: viewQuality };
+function renderMain(keepFocus) {
+  const pos = keepFocus && document.activeElement && document.activeElement.id === "q" ? document.activeElement.selectionStart : null;
+  $("#main").innerHTML = (VIEWS[state.view] || viewHome)();
+  if (state.view === "search") { const q = $("#q"); if (q && (pos !== null || !keepFocus)) { q.focus(); if (pos !== null) q.setSelectionRange(pos, pos); } }
+}
+function render() { renderNav(); renderMain(); }
+try { const t = localStorage.getItem("proto-theme"); if (t && t !== "auto") document.documentElement.dataset.theme = t; } catch (e) {}
+function fromHash() { const [v, pl] = (location.hash.slice(1) || "home").split("/"); if (!VIEWS[v]) return false; const changed = v !== state.view || (pl || null) !== (v === "playlist" ? state.pl : null); state.view = v; if (pl) state.pl = pl; return changed; }
+window.addEventListener("hashchange", () => { if (fromHash()) { render(); window.scrollTo(0, 0); } });
+fromHash();
+render();
+</script>
+</body>
+</html>

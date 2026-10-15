@@ -13,6 +13,9 @@ ERRORS_DIR = os.environ.get("ERRORS_DIR", os.path.join(CONF_DIR, "errors"))
 LOCKS_DIR = os.environ.get("LOCKS_DIR", os.path.join(CONF_DIR, ".webui-locks"))
 UPLOADS_DIR = os.environ.get("UPLOADS_DIR", os.path.join(CONF_DIR, ".webui-uploads"))
 
+# Индекс библиотеки (SQLite): файлы, их источники, плейлисты, дубли — app/db.py
+LIBRARY_DB = os.environ.get("LIBRARY_DB", os.path.join(CONF_DIR, "library.db"))
+
 # Папки музыки
 PLAYLISTS_M3U_DIR = os.environ.get("PLAYLISTS_M3U_DIR", os.path.join(MUSIC_DIR, "playlists"))
 
