@@ -199,10 +199,18 @@ function accessPage(item) {
 function systemPage() {
   const sys = (S.schema && S.schema.system) || [];
   const env = S.env || {};
+  const built = env.app_built ? new Date(env.app_built) : null;
+  const ver = env.app_commit && env.app_commit !== "dev"
+    ? `<a href="https://github.com/bastearima/spotdl-webui/commit/${esc(env.app_commit)}" target="_blank" rel="noopener"><code class="small">${esc(env.app_commit)}</code></a>`
+    : `<code class="small">${esc(env.app_commit || "dev")}</code>`;
+  const version = row("info-circle", "Версия", [env.app_commit_title, built && !isNaN(built)
+    ? `собран ${built.toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })} (${fmtAgo(built.getTime() / 1000)})`
+    : (env.app_commit === "dev" ? "локальная сборка" : "")].filter(Boolean).map(esc).join(" · "), ver);
   const rows = sys.map((x) => row("point", esc(x.env), esc(x.help || ""), `<code class="small" style="word-break:break-all">${esc(x.value)}</code>`));
   if (env.spotdl_version) rows.push(row("point", "spotdl", "", `<code class="small">${esc(env.spotdl_version)}</code>`));
   rows.push(row("point", "Deno", "нужен YouTube для части роликов", env.deno ? chip("есть", "ok") : chip("нет", "warn")));
-  return `<div class="section-label">Только чтение — задаётся в compose</div><div class="card list">${rows.join("")}</div>
+  return `<div class="section-label">Образ</div><div class="card list">${version}</div>
+    <div class="section-label">Только чтение — задаётся в compose</div><div class="card list">${rows.join("")}</div>
     <div class="section-label">Прежний интерфейс</div><div class="card list">${row("external-link", "Открыть прежний интерфейс",
       "запасной вариант на время обкатки нового", `<a class="btn sm" href="/legacy">/legacy</a>`)}</div>`;
 }
@@ -234,7 +242,8 @@ function subtitle(item) {
     case "navidrome": return S.nd && S.nd.url ? S.nd.url : "пересканирование после изменений";
     case "access": return S.auth && !S.auth.enabled ? "вход выключен" : "пароль, срок входа";
     case "logs": return "история задач, логи";
-    case "system": return "пути, пользователь, версии";
+    case "system": return S.env && S.env.app_commit ? `версия ${S.env.app_commit}${S.env.app_built
+      ? " · собран " + fmtAgo(new Date(S.env.app_built).getTime() / 1000) : ""}` : "пути, пользователь, версии";
     default: return "";
   }
 }

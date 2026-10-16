@@ -63,4 +63,14 @@ ENV CONF_DIR=/conf \
 
 EXPOSE 8000
 
+# Версия образа — её показывает «Настройки» → «О системе», чтобы было видно,
+# подтянулся ли свежий образ. Задаёт CI (коммит, его заголовок, время сборки);
+# в самом конце, чтобы смена коммита не сбрасывала кэш слоёв выше.
+ARG APP_COMMIT=dev
+ARG APP_COMMIT_TITLE=
+ARG APP_BUILT=
+ENV APP_COMMIT=$APP_COMMIT \
+    APP_COMMIT_TITLE=$APP_COMMIT_TITLE \
+    APP_BUILT=$APP_BUILT
+
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]

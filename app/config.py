@@ -34,6 +34,12 @@ AUDIO_FORMAT = os.environ.get("AUDIO_FORMAT", "mp3")
 AUTH_ENABLED = os.environ.get("AUTH_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
 APP_PASSWORD = (os.environ.get("APP_PASSWORD") or os.environ.get("APP_AUTH_TOKEN") or "").strip()
 
+# Версия образа: коммит, его заголовок и время сборки — вшивает CI (Dockerfile ARG).
+# Локально и в своей сборке без аргументов — "dev".
+APP_COMMIT = os.environ.get("APP_COMMIT", "dev")
+APP_COMMIT_TITLE = os.environ.get("APP_COMMIT_TITLE", "")
+APP_BUILT = os.environ.get("APP_BUILT", "")
+
 # Путь к исполняемому spotdl (в образе доступен в PATH)
 SPOTDL_BIN = os.environ.get("SPOTDL_BIN", "spotdl")
 

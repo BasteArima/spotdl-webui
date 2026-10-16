@@ -42,6 +42,9 @@ jobs:
           docker build \
             --cache-from "$IMAGE:latest" \
             --build-arg BUILDKIT_INLINE_CACHE=1 \
+            --build-arg "APP_COMMIT=$SHA" \
+            --build-arg "APP_COMMIT_TITLE=$(git log -1 --format=%s)" \
+            --build-arg "APP_BUILT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -t "$IMAGE:latest" \
             -t "$IMAGE:$SHA" \
             .
