@@ -76,6 +76,7 @@ _LANE_BY_KIND = {
     "autosync": LANE_BACKGROUND,     # плановый автосинк
     "index": LANE_BACKGROUND,        # скан /music → индекс библиотеки (app/scanner.py)
     "fetch": LANE_INTERACTIVE,       # «Авто»: Deezer по ISRC → Spotify напрямую
+    "merge": LANE_INTERACTIVE,       # склейка дублей (app/merge.py) — ждёт скан через library_lock
 }
 
 
@@ -1342,6 +1343,25 @@ def enqueue_index(full: bool = False) -> Optional[Job]:
     return _enqueue(Job("index", title, lambda job: _run_index(job, full)))
 
 
+def _run_merge(job: Job) -> None:
+    """Применить решения «один трек» (app/merge.py) — в подпроцессе, под тем же
+    library_lock, что и скан индекса."""
+    cmd = [sys.executable, "-m", "app.merge"]
+    rc, out = _run_process(job, cmd, cwd=_PROJECT_DIR, display=["merge"])
+    if rc != 0:
+        job.status = "error"
+
+
+def enqueue_merge() -> Job:
+    """Склейка решённых пар. Если такая задача уже ждёт — она подхватит и новые решения."""
+    with _jobs_lock:
+        for jid in _jobs_order:
+            j = _jobs[jid]
+            if j.kind == "merge" and j.status == "queued":
+                return j
+    return _enqueue(Job("merge", "Склейка дублей", _run_merge))
+
+
 def _has_pending_sync_all() -> bool:
     """Есть ли уже незавершённый sync-всех/автосинк — чтобы не плодить дубли."""
     with _jobs_lock:
@@ -1673,7 +1693,7 @@ def _worker(lane: str) -> None:
             if job.status == "done" and job.kind != "index":
                 navidrome.notify_changed()   # скан — позже, когда очередь затихнет
             if job.status == "done" and job.kind in ("sync", "sync-all", "autosync", "download",
-                                                      "deezer", "zotify", "upload", "fetch"):
+                                                      "deezer", "zotify", "upload", "fetch", "merge"):
                 try:
                     enqueue_index()          # новые файлы — в индекс библиотеки
                 except Exception as exc:  # noqa: BLE001 — индекс не должен ронять воркер

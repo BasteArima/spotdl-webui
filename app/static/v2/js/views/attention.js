@@ -1,5 +1,5 @@
 // «Внимание»: то, что сервис не может решить сам. Вкладки — в адресе:
-// #/attention (не скачано), #/attention/dupes, #/attention/sources.
+// #/attention (не скачано), #/attention/dupes, #/attention/sources, #/attention/trash.
 import { api } from "../api.js";
 import { bulkBar, missingRow, mountMissing, setCaps, updateMissingJobs } from "../missing.js";
 import { pokeSoon, refreshLibrary } from "../store.js";
@@ -8,17 +8,20 @@ import { chip, cover, esc, fmtNum, icon, on, plural, srcIcons, toast } from "../
 let data = null;
 let lastLibrary = null;
 let plFilter = "";            // id плейлиста во «Не скачано» ("" — все)
-let dupeLevel = "sure";       // sure — уровни 1–3, maybe — 4
+let dupeLevel = "sure";       // sure — уровни 1–3, подтверждённые названием; maybe — остальное
+let trash = null;             // корзина (грузится при открытии вкладки)
 let dupeShown = 30;
 const DUPE_PAGE = 30;
-const TABS = [["missing", "Не скачано"], ["dupes", "Дубли"], ["sources", "Источники"]];
+const TABS = [["missing", "Не скачано"], ["dupes", "Дубли"], ["sources", "Источники"], ["trash", "Корзина"]];
+const LOSSLESS = ["flac", "alac", "wav", "aiff", "ape", "wv"];
+const isSure = (p) => p.level <= 3 && p.safe;
 const LEVEL = { 1: "тот же ролик или трек", 2: "тот же ISRC", 3: "название, исполнитель и длительность", 4: "под вопросом" };
 
 const tabOf = (param) => (TABS.some(([k]) => k === param) ? param : "missing");
 const fmtDur = (s) => (s ? `${Math.floor(Math.round(s) / 60)}:${String(Math.round(s) % 60).padStart(2, "0")}` : "—");
 
 function counts(d) {
-  return { missing: d.missing.length, dupes: d.dupes.length, sources: d.unavailable.length };
+  return { missing: d.missing.length, dupes: d.dupes.length, sources: d.unavailable.length, trash: d.trashed || 0 };
 }
 
 function tabs(active, d) {
@@ -92,35 +95,40 @@ function side(t) {
     <div data-player="${t.id}"></div>`;
 }
 
+// как выбирает сервер (app/merge.py): без потерь → битрейт → больше плейлистов
 function better(a, b) {
-  return (a.bitrate || 0) >= (b.bitrate || 0) ? a : b;
+  const rank = (t) => [LOSSLESS.includes((t.codec || "").toLowerCase()) ? 1 : 0, t.bitrate || 0, (t.playlists || []).length];
+  const ra = rank(a), rb = rank(b);
+  for (let i = 0; i < ra.length; i++) if (ra[i] !== rb[i]) return ra[i] > rb[i] ? a : b;
+  return a.id <= b.id ? a : b;
 }
 
 function dupeCard(p) {
   const keep = better(p.a, p.b);
   return `<div class="card pad" style="margin-bottom:12px" data-dupe="${p.id}">
     <div class="row" style="justify-content:space-between;margin-bottom:10px;gap:8px;flex-wrap:wrap">
-      <span class="small muted">${esc(p.reason)}</span>${chip(`${LEVEL[p.level] || ""} · ${p.score}%`, p.level <= 3 ? "ok" : "warn")}</div>
+      <span class="small muted">${esc(p.reason)}</span>${chip(`${LEVEL[p.level] || ""} · ${p.score}%`, isSure(p) ? "ok" : "warn")}</div>
+    ${p.level <= 3 && !p.safe ? `<div class="tiny muted" style="margin:-4px 0 10px">Общий ID, но названия разные — возможно, spotdl взял один и тот же звук для двух разных песен. Послушайте оба файла.</div>` : ""}
     <div class="dup"><div class="side-a">${side(p.a)}</div><span class="vs muted">${icon("arrows-left-right")}</span><div class="side-b">${side(p.b)}</div></div>
     <div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap">
-      <button class="btn primary sm" data-decide="same">${icon("link", "sm")}Это один трек — оставить ${esc(keep.codec || "")} ${keep.bitrate ? keep.bitrate + "k" : ""}</button>
+      <button class="btn primary sm" data-decide="same">${icon("link", "sm")}Один трек — склеить, оставить ${esc(keep.codec || "")} ${keep.bitrate ? keep.bitrate + "k" : ""}</button>
       <button class="btn sm" data-decide="different">Разные треки</button></div></div>`;
 }
 
 function dupesTab(d) {
-  const sure = d.dupes.filter((p) => p.level <= 3);
-  const maybe = d.dupes.filter((p) => p.level > 3);
+  const sure = d.dupes.filter(isSure);
+  const maybe = d.dupes.filter((p) => !isSure(p));
   const list = dupeLevel === "maybe" ? maybe : sure;
   const note = `<div class="card pad row" style="gap:10px;margin-bottom:12px">${icon("info-circle", "muted")}<div class="small muted">
-    «Это один трек» пока запоминается: склеивать файлы безопасно, когда плейлисты для Navidrome собирает сам сервис —
-    это следующий этап, тогда отмеченные пары склеятся сами (лишний файл — в корзину, не удаляется).${
-    d.dupes_pending_merge ? ` Уже отмечено: ${fmtNum(d.dupes_pending_merge)}.` : ""}</div></div>`;
+    «Один трек» склеивает пару: файл лучшего качества остаётся, второй уходит в корзину (не удаляется — его можно
+    вернуть во вкладке «Корзина»), плейлисты переходят на оставшийся.${
+    d.dupes_pending_merge ? ` Склеивается сейчас: ${fmtNum(d.dupes_pending_merge)}.` : ""}</div></div>`;
   const seg = `<div class="row" style="gap:10px;margin-bottom:12px;flex-wrap:wrap">
     <div class="seg"><button data-dlevel="sure" class="${dupeLevel === "sure" ? "on" : ""}">Уверенные · ${fmtNum(sure.length)}</button>
       <button data-dlevel="maybe" class="${dupeLevel === "maybe" ? "on" : ""}">Под вопросом · ${fmtNum(maybe.length)}</button></div>
-    ${dupeLevel === "sure" && sure.length ? `<button class="btn tinted sm" data-bulk-same>${icon("link", "sm")}Отметить все уверенные как один трек</button>` : ""}</div>
+    ${dupeLevel === "sure" && sure.length ? `<button class="btn tinted sm" data-bulk-same>${icon("link", "sm")}Склеить все уверенные</button>` : ""}</div>
     <div class="tiny muted" style="margin:-4px 4px 12px">${dupeLevel === "sure"
-      ? "Уверенные: тот же ролик YouTube или трек Spotify, тот же ISRC, либо совпали название, исполнитель и длительность."
+      ? "Уверенные: тот же ролик YouTube или трек Spotify, тот же ISRC, либо совпали название, исполнитель и длительность — и название это подтверждает."
       : "Под вопросом: похоже, но не точно — лучше послушать обе версии."}</div>`;
   if (!list.length) {
     return note + seg + `<div class="card empty">${icon("circle-check", "xl")}<div style="margin-top:8px">Здесь пусто</div></div>`;
@@ -141,8 +149,40 @@ function sourcesTab(d) {
     <button class="btn sm" data-remove="${esc(u.ref)}" data-name="${esc(u.name)}">Убрать</button></div>`).join("")}</div>`;
 }
 
+// ---------------------------------------------------------------- корзина
+function fmtSize(b) {
+  if (!b) return "0 МБ";
+  return b >= 1e9 ? `${(b / 1e9).toFixed(1)} ГБ` : `${Math.max(1, Math.round(b / 1e6))} МБ`;
+}
+
+function trashTab() {
+  if (!trash) return `<div class="card empty">${icon("refresh", "xl")}<div style="margin-top:8px">Загружаю…</div></div>`;
+  if (!trash.items.length) {
+    return `<div class="card empty">${icon("trash", "xl")}<div style="margin-top:8px">Корзина пуста</div>
+      <div class="tiny muted" style="margin-top:4px">Сюда попадают лишние файлы при склейке дублей</div></div>`;
+  }
+  const rows = trash.items.map((t) => `<div class="li">${icon("file-music", "muted")}
+    <div class="grow" style="min-width:0"><div class="ellip">${esc(t.artist ? `${t.artist} — ${t.title}` : t.title)}</div>
+      <div class="tiny muted ellip">был: ${esc(t.from || "")} · ${esc(t.codec || "")} ${t.bitrate ? t.bitrate + "k" : ""}</div>
+      <div class="tiny muted ellip">остался: ${esc(t.kept && t.kept.path ? t.kept.path : "—")}</div></div>
+    ${t.exists ? `<button class="btn sm" data-restore="${t.id}">Вернуть</button>` : `<span class="tiny muted">файла нет</span>`}</div>`).join("");
+  return `<div class="card pad row" style="gap:10px;margin-bottom:12px;flex-wrap:wrap">${icon("info-circle", "muted")}
+      <div class="grow small muted" style="min-width:220px">${fmtNum(trash.items.length)} ${plural(trash.items.length, "файл", "файла", "файлов")} ·
+      ${fmtSize(trash.bytes)} в /music/.trash. Navidrome их не видит. «Вернуть» кладёт файл на прежнее место, а пару помечает как разные треки.</div>
+      <button class="btn sm" data-empty-trash>${icon("trash", "sm")}Очистить корзину</button></div>
+    <div class="card list">${rows}</div>`;
+}
+
+async function loadTrash(root) {
+  try {
+    trash = await api("GET", "/api/v2/trash");
+  } catch (e) { trash = { items: [], bytes: 0 }; toast(e.message); }
+  if (tabOf(location.hash.split("/")[2] || "") === "trash") redraw(root, true);
+}
+
 // ---------------------------------------------------------------- экран
 function body(tab, d) {
+  if (tab === "trash") return trashTab();
   if (tab === "dupes") return dupesTab(d);
   if (tab === "sources") return sourcesTab(d);
   return missingTab(d);
@@ -153,6 +193,7 @@ export async function render(ctx) {
   setCaps(data.caps);
   lastLibrary = ctx.state.library;
   dupeShown = DUPE_PAGE;
+  trash = null;
   const tab = tabOf(ctx.param);
   return `<h1>Внимание</h1><p class="sub">То, что сервис не может решить сам</p>
     <div id="att-tabs">${tabs(tab, data)}</div><div id="att-body">${body(tab, data)}</div>`;
@@ -167,6 +208,7 @@ function redraw(root, force = false) {
 }
 
 export function mount(root) {
+  if (tabOf(location.hash.split("/")[2] || "") === "trash") loadTrash(root);
   mountMissing(root, {
     getTracks: () => (data ? visibleMissing(data) : []),
     bulkUrl: () => (plFilter ? `/api/v2/playlists/${plFilter}/fetch-missing` : "/api/v2/attention/fetch-missing"),
@@ -204,22 +246,45 @@ export function mount(root) {
       root.querySelectorAll("audio").forEach((a) => a.pause());
       data.dupes = data.dupes.filter((p) => p.id !== id);
       if (decision === "same") data.dupes_pending_merge += 1;
-      toast(decision === "same" ? "Отмечено: склеится на следующем этапе" : "Отмечено: разные треки");
+      toast(decision === "same" ? "Склеиваю: лучший файл остаётся, второй — в корзину" : "Отмечено: разные треки");
+      if (decision === "same") pokeSoon();
       redraw(root, true);
       refreshLibrary();                  // счётчик «Внимания» в меню
     } catch (ex) { toast(ex.message); }
   });
   on(root, "click", "[data-bulk-same]", async () => {
-    const n = data.dupes.filter((p) => p.level <= 3).length;
-    if (!confirm(`Отметить ${n} ${plural(n, "уверенную пару", "уверенные пары", "уверенных пар")} как «один трек»? Файлы сейчас не трогаются — склейка будет на следующем этапе.`)) return;
+    const n = data.dupes.filter(isSure).length;
+    if (!confirm(`Склеить ${n} ${plural(n, "уверенную пару", "уверенные пары", "уверенных пар")}? В каждой паре остаётся файл лучшего качества, второй уходит в корзину /music/.trash — его можно вернуть.`)) return;
     try {
-      const r = await api("POST", "/api/v2/dupes/bulk", { levels: [1, 2, 3], decision: "same" });
-      data.dupes = data.dupes.filter((p) => p.level > 3);
+      const r = await api("POST", "/api/v2/dupes/bulk", { levels: [1, 2, 3], decision: "same", safe_only: true });
+      data.dupes = data.dupes.filter((p) => !isSure(p));
       data.dupes_pending_merge += r.updated;
-      toast(`Отмечено ${fmtNum(r.updated)}`);
+      toast(`Склеиваю ${fmtNum(r.updated)} — ход в «Активности»`);
+      pokeSoon();
       root.querySelectorAll("audio").forEach((a) => a.pause());
       redraw(root, true);
       refreshLibrary();
+    } catch (ex) { toast(ex.message); }
+  });
+  on(root, "click", "[data-restore]", async (e, b) => {
+    try {
+      await api("POST", `/api/v2/trash/${b.dataset.restore}/restore`);
+      trash.items = trash.items.filter((t) => String(t.id) !== b.dataset.restore);
+      data.trashed = Math.max(0, (data.trashed || 1) - 1);
+      toast("Файл возвращён, пара отмечена как разные треки");
+      redraw(root, true);
+      pokeSoon();
+    } catch (ex) { toast(ex.message); }
+  });
+  on(root, "click", "[data-empty-trash]", async () => {
+    const n = trash ? trash.items.length : 0;
+    if (!confirm(`Удалить насовсем ${n} ${plural(n, "файл", "файла", "файлов")} из корзины (${fmtSize(trash && trash.bytes)})? Вернуть их будет нельзя.`)) return;
+    try {
+      const r = await api("POST", "/api/v2/trash/empty");
+      trash = { items: [], bytes: 0 };
+      data.trashed = 0;
+      toast(`Удалено файлов: ${fmtNum(r.files)}`);
+      redraw(root, true);
     } catch (ex) { toast(ex.message); }
   });
   on(root, "click", "[data-remove]", async (e, b) => {
@@ -240,6 +305,10 @@ async function refetch(root) {
   try {
     data = await api("GET", "/api/v2/attention");
     setCaps(data.caps);
+    if (trash !== null) {
+      trash = null;
+      await loadTrash(root);      // перерисует и сама, если открыта корзина
+    }
     redraw(root);
   } catch (e) { /* попробуем со следующим снимком */ }
   refetching = false;

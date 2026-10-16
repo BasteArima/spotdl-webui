@@ -320,7 +320,19 @@ app/spotify_source.py список треков источника без заг
 app/m3u_gen.py       m3u для managed-плейлистов из индекса: только скачанное, по порядку источника,
                      формат и путь как у spotdl; переписывается только при изменении. Пишется в конце
                      синка и в конце задачи index (scanner CLI → m3u_written → Navidrome-скан).
-app/upgrade.py       Step 2: массовый апгрейд (контроллер + воркер)
+app/merge.py         склейка дублей (4.4): решение «same» → merge_pair: лучший файл (lossless → битрейт →
+                     больше плейлистов) остаётся, худший — в /music/.trash/<тот же путь> (+.lrc, в корзине
+                     .ndignore для Navidrome); ряд худшего — status 'trashed' (trashed_from, merged_into),
+                     плейлисты и track_ids — на оставшийся; m3u: managed — заново, прежние spotdl — заменой
+                     строки (fix_m3u). auto_eligible: ур. 1–3 И сравнение БЕЗ общих ID даёт ур. ≤3 —
+                     пары «общий ролик, разные названия» (spotdl взял один звук для двух песен) только
+                     вручную; это же правило у «Склеить все уверенные» (safe_only) и AUTO_MERGE=sure.
+                     Задача очереди «merge» (python -m app.merge) и скан индекса — под db.library_lock
+                     (fcntl, межпроцессный): скан иначе счёл бы перенесённый файл пропавшим. Сканер
+                     игнорирует trashed-ряды и папку .trash. restore → пара decision='different'.
+app/upgrade.py       Step 2: массовый апгрейд (контроллер + воркер). Список — из индекса (файлы с ID Spotify),
+                     воркеру уходит «url\tпуть», librespot_dl заменяет ИМЕННО этот файл (target), а не путь по
+                     шаблону — иначе после склейки/другого релиза рядом появлялся бы второй файл.
 app/static/          index.html, app.js, style.css — прежний UI (на «/legacy», ссылка — в «Настройки» → «О системе»)
 app/static/v2/       основной UI по design/prototype.html (на «/»; «/new» → редирект на «/»): index.html, app.css,
                      icons.svg (спрайт Tabler — только используемые иконки: новая = скачать

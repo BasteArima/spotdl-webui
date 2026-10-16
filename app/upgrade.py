@@ -1,13 +1,14 @@
 """Step 2: фоновый массовый апгрейд библиотеки до 320k через Spotify (librespot).
 
-Проходит по всем трекам библиотеки (из *.spotdl в /conf), для каждого ещё не
-апгрейженного скачивает 320k и перезаписывает файл по тому же пути. Метка «уже
+Проходит по всем файлам библиотеки с треком Spotify (индекс /conf/library.db),
+для каждого ещё не апгрейженного скачивает 320k и перезаписывает ИМЕННО этот
+файл (путь из индекса, а не по шаблону: трек мог прийти под другим релизом или
+остаться после склейки дублей — иначе рядом появился бы второй файл). Метка «уже
 320k» хранится персистентно (/conf/.webui-upgraded.json), поэтому повторно треки
 НЕ качаются и прогресс переживает рестарт. Загрузки идут в real-time (скорость
 прослушивания, анти-бан), отдельным потоком, не блокируя UI.
 """
 import collections
-import glob
 import json
 import os
 import queue
@@ -17,7 +18,7 @@ import threading
 import time
 from typing import Optional
 
-from . import config, navidrome, playlists, settings
+from . import config, navidrome, settings
 
 _STATE_FILE = os.path.join(config.CONF_DIR, ".webui-upgraded.json")
 
@@ -61,22 +62,22 @@ class _UpgradeController:
 
     # ---- список треков библиотеки ----
     def _worklist(self) -> list:
-        seen = {}
-        for path in glob.glob(os.path.join(config.CONF_DIR, "*.spotdl")):
-            try:
-                with open(path, "r", encoding="utf-8") as fh:
-                    data = json.load(fh)
-            except (OSError, ValueError):
-                continue
-            # раньше читался только формат-список (download), а `sync` пишет
-            # объект {"songs": [...]} — треки синкнутых плейлистов апгрейд не видел
-            for t in playlists.savefile_songs(data):
-                url = t.get("url")
-                if not url or url in seen:
+        """Файлы библиотеки с треком Spotify. У склеенного трека ID бывает
+        несколько — уже апгрейженный под любым из них не качается снова."""
+        from . import db
+        out = []
+        with db.connect() as conn:
+            for r in conn.execute(
+                    "SELECT t.path, t.artist, t.title, GROUP_CONCAT(i.value) AS ids FROM tracks t "
+                    "JOIN track_ids i ON i.track_id = t.id AND i.kind = 'spotify' "
+                    "WHERE t.status = 'ok' AND t.path IS NOT NULL GROUP BY t.id ORDER BY t.id"):
+                urls = [f"https://open.spotify.com/track/{v}" for v in sorted((r["ids"] or "").split(",")) if v]
+                if not urls:
                     continue
-                name = f"{t.get('artist') or ''} - {t.get('name') or ''}".strip(" -")
-                seen[url] = {"url": url, "name": name or url}
-        return list(seen.values())
+                done = next((u for u in urls if u in self.upgraded), None)
+                name = f"{r['artist'] or ''} - {r['title'] or ''}".strip(" -")
+                out.append({"url": done or urls[0], "name": name or urls[0], "path": r["path"]})
+        return out
 
     # ---- статус для UI ----
     def status(self) -> dict:
@@ -129,7 +130,7 @@ class _UpgradeController:
                 break
             with self._lock:
                 self.stats["current"] = item["name"]
-            res = self._download(url, item["name"])
+            res = self._download(url, item["name"], item.get("path") or "")
             if res is None and self._stop:
                 break                        # остановили посреди трека — это не сбой трека
             ok = bool(res and (res.get("ok") or res.get("skipped")))
@@ -227,14 +228,14 @@ class _UpgradeController:
         except Exception:  # noqa: BLE001
             pass
 
-    def _download(self, url: str, name: str) -> Optional[dict]:
+    def _download(self, url: str, name: str, path: str = "") -> Optional[dict]:
         """Ответ воркера по треку ({"ok"|"skipped"|"error"…}) или None при сбое."""
         if self._stop:
             return None
         try:
             w = self._ensure_worker()
             q = self._result_q
-            w.stdin.write(url + "\n")
+            w.stdin.write(url + ("\t" + path if path else "") + "\n")
             w.stdin.flush()
         except Exception as exc:  # noqa: BLE001 — воркер умер при записи
             print(f"[upgrade] воркер недоступен ({exc}) — перезапуск", flush=True)

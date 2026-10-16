@@ -15,13 +15,13 @@ let limit = 60;
 
 const KIND = {
   sync: "Синк", "sync-all": "Синк всех плейлистов", autosync: "Автосинк", index: "Обновление индекса библиотеки",
-  download: "YouTube", deezer: "Deezer", zotify: "Spotify 320k", upload: "Свой файл", fetch: "Авто",
+  download: "YouTube", deezer: "Deezer", zotify: "Spotify 320k", upload: "Свой файл", fetch: "Авто", merge: "Склейка дублей",
 };
 
 function title(j) {
   if (j.group) return `Загрузка треков «${j.name}»`;
   if (j.kind === "sync") return `Синк «${j.name}»`;
-  if (j.kind === "sync-all" || j.kind === "autosync" || j.kind === "index") return KIND[j.kind];
+  if (j.kind === "sync-all" || j.kind === "autosync" || j.kind === "index" || j.kind === "merge") return KIND[j.kind];
   if (KIND[j.kind]) return `${KIND[j.kind]} · ${j.subject || j.name}`;
   return j.subject || j.title || j.name;
 }

@@ -231,19 +231,24 @@ def attention(conn) -> dict:
     plats = track_platforms(conn, tids)
     by_id = {t["id"]: t for t in conn.execute(
         f"SELECT * FROM tracks WHERE id IN ({','.join('?' for _ in tids) or 'NULL'})", tids)}
+    from . import merge
+    safe = set(merge.auto_eligible(conn))   # уверенные, подтверждённые и названием
     dupes = []
     for c in cands:
         a, b = by_id.get(c["track_a"]), by_id.get(c["track_b"])
         if not a or not b:
             continue
         dupes.append({"id": c["id"], "level": c["level"], "score": c["score"], "reason": c["reason"],
-                      "a": _side(conn, a, plats), "b": _side(conn, b, plats)})
-    decided_same = conn.execute("SELECT COUNT(*) FROM match_candidates WHERE decision = 'same'").fetchone()[0]
+                      "safe": c["id"] in safe, "a": _side(conn, a, plats), "b": _side(conn, b, plats)})
+    decided_same = conn.execute("SELECT COUNT(*) FROM match_candidates WHERE decision = 'same' "
+                                "AND applied_at IS NULL").fetchone()[0]
+    trashed = conn.execute("SELECT COUNT(*) FROM tracks WHERE status = 'trashed'").fetchone()[0]
 
     unavailable = [dict(r) for r in conn.execute(
         "SELECT p.id, p.name, ps.kind, ps.ref FROM playlist_sources ps JOIN playlists p ON p.id = ps.playlist_id "
         "WHERE ps.status = 'unavailable' ORDER BY p.position")]
-    return {"missing": missing, "dupes": dupes, "dupes_pending_merge": decided_same, "unavailable": unavailable}
+    return {"missing": missing, "dupes": dupes, "dupes_pending_merge": decided_same, "trashed": trashed,
+            "unavailable": unavailable}
 
 
 # ------------------------------------------------------------------ библиотека
@@ -263,11 +268,13 @@ _PLATFORM_SQL = {
 
 def library_overview(conn, min_bitrate: int, upgraded_urls: set) -> dict:
     one = lambda sql, *a: conn.execute(sql, a).fetchone()[0]  # noqa: E731
+    # трек, а не ID: у склеенного трека ID Spotify бывает несколько
     sp_ok = conn.execute(
-        "SELECT t.bitrate, i.value FROM tracks t JOIN track_ids i ON i.track_id = t.id AND i.kind = 'spotify' "
-        "WHERE t.status = 'ok'").fetchall()
+        "SELECT t.bitrate, GROUP_CONCAT(i.value) AS ids FROM tracks t JOIN track_ids i ON i.track_id = t.id "
+        "AND i.kind = 'spotify' WHERE t.status = 'ok' GROUP BY t.id").fetchall()
     below = [r for r in sp_ok if (r["bitrate"] or 0) < min_bitrate]
-    pending = [r for r in below if f"https://open.spotify.com/track/{r['value']}" not in upgraded_urls]
+    pending = [r for r in below if not any(f"https://open.spotify.com/track/{v}" in upgraded_urls
+                                           for v in (r["ids"] or "").split(",") if v)]
     return {
         "tracks": one("SELECT COUNT(*) FROM tracks WHERE status = 'ok'"),
         "size": one("SELECT COALESCE(SUM(file_size), 0) FROM tracks WHERE status = 'ok'"),

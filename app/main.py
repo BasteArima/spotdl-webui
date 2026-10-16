@@ -42,6 +42,16 @@ def _startup() -> None:
     jobs.start_worker()
     jobs.start_scheduler()  # фоновый автосинк по расписанию (если включён)
     jobs.enqueue_index()    # индекс библиотеки догоняет файлы (инкрементально — секунды)
+    try:
+        # решения «один трек», принятые до склейки (этап 2) или до рестарта, — применить
+        from . import db
+        with db.connect() as conn:
+            pending = conn.execute("SELECT COUNT(*) FROM match_candidates WHERE decision = 'same' "
+                                   "AND applied_at IS NULL").fetchone()[0]
+        if pending:
+            jobs.enqueue_merge()
+    except Exception as exc:  # noqa: BLE001 — старт веба важнее
+        print(f"[merge] не удалось проверить несклеенные пары: {exc}", flush=True)
 
 
 # ------------------------------------------------------------------ авторизация
@@ -401,6 +411,7 @@ class DupeDecisionIn(BaseModel):
 class DupesBulkIn(BaseModel):
     levels: list[int]
     decision: str
+    safe_only: bool = True          # только пары, где совпадение подтверждает и название
 
 
 @app.post("/api/v2/dupes/bulk", dependencies=[Depends(require_auth)])
@@ -412,16 +423,24 @@ def api_v2_dupes_bulk(body: DupesBulkIn):
     levels = [lv for lv in body.levels if lv in (1, 2, 3, 4)]
     if not levels:
         raise HTTPException(status_code=400, detail="Нужны уровни 1–4")
+    from . import merge
     with db.connect() as conn:
-        cur = conn.execute(f"UPDATE match_candidates SET decision = ?, decided_at = ? WHERE decision IS NULL "
-                           f"AND level IN ({','.join('?' for _ in levels)})", (body.decision, time.time(), *levels))
-    return {"updated": cur.rowcount}
+        ids = [r[0] for r in conn.execute(f"SELECT id FROM match_candidates WHERE decision IS NULL "
+                                          f"AND level IN ({','.join('?' for _ in levels)})", levels)]
+        if body.safe_only:
+            safe = set(merge.auto_eligible(conn))
+            ids = [i for i in ids if i in safe]
+        with db.transaction(conn):
+            conn.executemany("UPDATE match_candidates SET decision = ?, decided_at = ? WHERE id = ?",
+                             [(body.decision, time.time(), i) for i in ids])
+    job = jobs.enqueue_merge() if body.decision == "same" and ids else None
+    return {"updated": len(ids), "job": job.to_dict() if job else None}
 
 
 @app.post("/api/v2/dupes/{cand_id}", dependencies=[Depends(require_auth)])
 def api_v2_dupe_decision(cand_id: int, body: DupeDecisionIn):
-    """Решение по паре. «same» пока только запоминается: склеивать файлы безопасно,
-    когда m3u собирает сам сервис (design/plan.md, этап 3), — тогда решения применятся."""
+    """Решение по паре. «same» — склейка (app/merge.py): лучший файл остаётся,
+    второй уходит в корзину."""
     from . import db
     if body.decision not in ("same", "different"):
         raise HTTPException(status_code=400, detail="Решение: same или different")
@@ -430,7 +449,39 @@ def api_v2_dupe_decision(cand_id: int, body: DupeDecisionIn):
                            (body.decision, time.time(), cand_id))
     if not cur.rowcount:
         raise HTTPException(status_code=404, detail="Пара не найдена")
-    return {"ok": True}
+    job = jobs.enqueue_merge() if body.decision == "same" else None
+    return {"ok": True, "job": job.to_dict() if job else None}
+
+
+# ---- корзина (склейка дублей, задача 4.4)
+@app.get("/api/v2/trash", dependencies=[Depends(require_auth)])
+def api_v2_trash():
+    from . import db, merge
+    with db.connect() as conn:
+        items = merge.trash_list(conn)
+    return {"items": items, "bytes": sum(i["size"] or 0 for i in items if i["exists"])}
+
+
+@app.post("/api/v2/trash/{track_id}/restore", dependencies=[Depends(require_auth)])
+def api_v2_trash_restore(track_id: int):
+    from . import db, merge
+    with db.library_lock(), db.connect() as conn:
+        try:
+            with db.transaction(conn):
+                path = merge.restore(conn, track_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    jobs.enqueue_index()          # сканер дочитает теги вернувшегося файла
+    return {"ok": True, "path": path}
+
+
+@app.post("/api/v2/trash/empty", dependencies=[Depends(require_auth)])
+def api_v2_trash_empty():
+    from . import db, merge
+    with db.library_lock(), db.connect() as conn:
+        with db.transaction(conn):
+            res = merge.empty_trash(conn)
+    return res
 
 
 def _overview(conn) -> dict:

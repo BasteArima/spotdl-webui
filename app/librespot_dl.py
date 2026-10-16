@@ -31,19 +31,24 @@ def _pace_sleep(written: int, size, duration, started_at: float, now: float) -> 
 
 
 def download_one(session, spotify_url: str, template: str, fmt: str, bitrate: str,
-                 safe: str = "", realtime: bool = False, min_bitrate: int = 0, log=print):
+                 safe: str = "", realtime: bool = False, min_bitrate: int = 0, log=print,
+                 target: str = None):
     """Скачать один трек через ПЕРЕДАННУЮ сессию и положить в библиотеку.
     Возвращает (status, value): status ∈ {'ok','skip','fail'}; value — путь или текст.
+    target — заменить этот файл библиотеки (апгрейд), а не класть по шаблону.
     SpotifyClient должен быть уже инициализирован вызывающим (library.init_spotify)."""
     from app import config, library, settings
     from librespot.audio.decoders import AudioQuality, VorbisOnlyAudioQuality
     from librespot.metadata import TrackId
 
+    if target and os.path.splitext(target)[1].lower() != f".{fmt}".lower():
+        # заменить файл другого формата — значит положить рядом второй
+        return ("fail", f"файл в формате {os.path.splitext(target)[1]} — замена на {fmt} не делается")
     song = library.fetch_song(spotify_url)
 
     # Пропуск уже-хороших файлов (порог задаёт только апгрейд)
     if min_bitrate > 0:
-        out_existing = library.target_path(song, template, fmt)
+        out_existing = target or library.target_path(song, template, fmt)
         if os.path.exists(out_existing):
             br = library.file_bitrate(str(out_existing))
             if br and br >= min_bitrate:
@@ -100,7 +105,7 @@ def download_one(session, spotify_url: str, template: str, fmt: str, bitrate: st
 
     m3u = config.m3u_path(safe) if safe else None
     try:
-        out = library.place_file(ogg, song, template, fmt, bitrate, log=log, m3u_path=m3u)
+        out = library.place_file(ogg, song, template, fmt, bitrate, log=log, m3u_path=m3u, out_path=target)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
     return ("ok", out)

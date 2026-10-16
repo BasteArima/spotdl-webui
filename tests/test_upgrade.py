@@ -21,7 +21,7 @@ def _controller(results):
         ("https://open.spotify.com/track/c", "Artist - Fails"),
     )]
     c._worklist = lambda: items
-    c._download = lambda url, name: results.get(url)
+    c._download = lambda url, name, path="": results.get(url)
     c._kill_worker = lambda: None
     return c
 
@@ -44,7 +44,7 @@ def test_stop_mid_track_is_not_a_failure():
     c = _controller({})
     calls = []
 
-    def download(url, name):
+    def download(url, name, path=""):
         calls.append(url)
         c._stop = True                               # остановили, пока трек качался
         return None

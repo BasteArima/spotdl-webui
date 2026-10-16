@@ -231,7 +231,8 @@ def scan(music_dir: Optional[str] = None, db_path: Optional[str] = None, full: b
     with db.connect(db_path) as conn:
         existing: Dict[str, Tuple[int, Optional[float], Optional[int]]] = {
             r["path"]: (r["id"], r["file_mtime"], r["file_size"])
-            for r in conn.execute("SELECT id, path, file_mtime, file_size FROM tracks WHERE path IS NOT NULL")}
+            for r in conn.execute("SELECT id, path, file_mtime, file_size FROM tracks "
+                                  "WHERE path IS NOT NULL AND status != 'trashed'")}
         seen = set()
         pending = 0
         conn.execute("BEGIN IMMEDIATE")
@@ -308,6 +309,12 @@ def last_scan(db_path: Optional[str] = None) -> Optional[dict]:
 
 
 def _cli() -> None:
+    # склейка дублей переносит файлы — скан не должен идти одновременно с ней
+    with db.library_lock():
+        _cli_locked()
+
+
+def _cli_locked() -> None:
     full = "--full" in sys.argv[1:]
     print(f"[scan] {'полный' if full else 'инкрементальный'} скан {config.MUSIC_DIR}", flush=True)
     try:
@@ -356,6 +363,19 @@ def _cli() -> None:
         for ex in dup.pop("examples", []):
             print(f"[dupes]   {ex}", flush=True)
         res["dedupe"] = dup
+        # авто-склейка уверенных дублей (настройка auto_merge, задача 4.4)
+        from . import settings
+        if settings.get("auto_merge") == "sure":
+            from . import merge
+            try:
+                mrg = merge.apply(auto=True, log=lambda m: print(m, flush=True))
+            except Exception as e:  # noqa: BLE001
+                print(json.dumps({"ok": False, "error": f"склейка: {type(e).__name__}: {e}"}), flush=True)
+                sys.exit(1)
+            if mrg["merged"] or mrg["errors"]:
+                print(f"[merge] склеено автоматически {mrg['merged']}"
+                      + (f", ошибок {mrg['errors']}" if mrg["errors"] else ""), flush=True)
+            res["merge"] = mrg
         # m3u плейлистов, которые синкает сервис, — по свежему индексу
         from . import m3u_gen
         try:

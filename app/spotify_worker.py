@@ -42,17 +42,19 @@ def main() -> None:
     session = librespot_dl.open_session(creds)
     _log("[worker] сессия librespot открыта (переиспользуется)")
 
-    def run(url):
+    def run(url, target):
         return librespot_dl.download_one(
             session, url, template, fmt, bitrate,
-            safe="", realtime=realtime, min_bitrate=min_bitrate, log=_log)
+            safe="", realtime=realtime, min_bitrate=min_bitrate, log=_log, target=target or None)
 
     for line in sys.stdin:
-        url = line.strip()
+        # «ссылка» или «ссылка<TAB>путь файла в библиотеке» — заменить именно его
+        url, _tab, target = line.rstrip("\r\n").partition("\t")
+        url = url.strip()
         if not url:
             continue
         try:
-            status, value = run(url)
+            status, value = run(url, target)
         except Exception as exc:  # noqa: BLE001 — переоткрываем сессию и пробуем ещё раз
             _log(f"[worker] ошибка: {type(exc).__name__}: {exc} — переоткрываю сессию")
             try:
@@ -62,7 +64,7 @@ def main() -> None:
             try:
                 session = librespot_dl.open_session(creds)
                 _log("[worker] сессия переоткрыта")
-                status, value = run(url)
+                status, value = run(url, target)
             except Exception as exc2:  # noqa: BLE001
                 _log(f"[worker] повтор не удался: {type(exc2).__name__}: {exc2}")
                 status, value = ("fail", str(exc2))

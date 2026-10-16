@@ -99,15 +99,16 @@ def append_to_m3u(out_path: str, song, m3u_path: str, template: str, fmt: str, l
 
 
 def place_file(input_path: str, song, template: str, fmt: str, bitrate: str,
-               log=print, m3u_path: str = None) -> str:
+               log=print, m3u_path: str = None, out_path: str = None) -> str:
     """Конвертирует input_path в формат библиотеки, кладёт по шаблону и вшивает
     метаданные/обложку из song. Если задан m3u_path — дописывает трек в плейлист
-    (без полного sync). Возвращает итоговый путь."""
+    (без полного sync). out_path — положить ровно сюда (замена файла
+    библиотеки при апгрейде) вместо пути по шаблону. Возвращает итоговый путь."""
     from spotdl.utils.formatter import create_file_name
     from spotdl.utils.ffmpeg import convert
     from spotdl.utils.metadata import embed_metadata
 
-    out = create_file_name(song, template, fmt)
+    out = Path(out_path) if out_path else create_file_name(song, template, fmt)
     # spotdl 4.5.0 прогоняет части пути через sanitize (вырезает '/'), из-за чего
     # абсолютный путь может стать относительным — возвращаем под корень.
     if not out.is_absolute():

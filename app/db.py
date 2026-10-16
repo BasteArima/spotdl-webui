@@ -143,6 +143,16 @@ CREATE TABLE meta (
 -- 0 — по-старому: spotdl sync, m3u и save-файл пишет он, индекс их импортирует.
 ALTER TABLE playlists ADD COLUMN managed INTEGER NOT NULL DEFAULT 0;
 """),
+    (3, "склейка дублей: корзина и применённые решения (задача 4.4)", """
+-- Трек, склеенный с другим: status = 'trashed', path — где файл лежит в корзине
+-- (/music/.trash/…), trashed_from — откуда его убрали, merged_into — с каким
+-- треком склеен. По ним корзина показывается и возвращается.
+ALTER TABLE tracks ADD COLUMN merged_into INTEGER;
+ALTER TABLE tracks ADD COLUMN trashed_from TEXT;
+ALTER TABLE tracks ADD COLUMN trashed_at REAL;
+-- решение «один трек» уже применено (файлы склеены)
+ALTER TABLE match_candidates ADD COLUMN applied_at REAL;
+"""),
 ]
 
 SCHEMA_VERSION = MIGRATIONS[-1][0]
@@ -201,6 +211,26 @@ def connect(path: Optional[str] = None) -> Iterator[sqlite3.Connection]:
         yield conn
     finally:
         conn.close()
+
+
+@contextmanager
+def library_lock() -> Iterator[None]:
+    """Файловый лок «меняю файлы библиотеки»: скан индекса и склейка дублей не
+    должны идти одновременно (скан увидел бы, что файл исчез на полпути, и
+    удалил бы его ряд). Межпроцессный: скан идёт в подпроцессе. Без fcntl
+    (Windows, тесты) — без лока."""
+    try:
+        import fcntl
+    except ImportError:
+        yield
+        return
+    os.makedirs(config.LOCKS_DIR, exist_ok=True)
+    with open(os.path.join(config.LOCKS_DIR, "library.lock"), "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 @contextmanager
