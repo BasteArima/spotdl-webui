@@ -98,6 +98,11 @@ def _import_playlist(conn, pl, position: int, now: float, report: dict) -> None:
         tid = find_track(conn, sp, song.get("isrc"))
         if tid is None:
             tid = add_missing_track(conn, song, sp, now, origin="savefile")
+        elif sp:
+            # нашёлся по ISRC — запомнить и ID Spotify: синк через индекс получает
+            # списки без ISRC и находит трек только по нему
+            conn.execute("INSERT OR IGNORE INTO track_ids(kind, value, track_id, origin) "
+                         "VALUES ('spotify', ?, ?, 'savefile')", (sp, tid))
         status = conn.execute("SELECT status FROM tracks WHERE id = ?", (tid,)).fetchone()[0]
         conn.execute("INSERT OR IGNORE INTO playlist_items(playlist_id, source_id, track_id, position, added_at) "
                      "VALUES (?, ?, ?, ?, ?)", (pid, sid, tid, pos, now))

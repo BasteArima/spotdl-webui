@@ -35,6 +35,9 @@ from . import config, db, matching
 RESULT_PREFIX = "@@webui-result "        # см. app/spotdl_run.py
 _SPOTIFY_ID = re.compile(r"open\.spotify\.com/(?:intl-[a-z]+/)?track/([A-Za-z0-9]{22})")
 _YT_URL = re.compile(r"https?://\S*(?:youtube\.com|youtu\.be)\S*")
+# «нет на YouTube» ищется заново не чаще: поиск не нашедшегося трека занимает у
+# spotdl около минуты, а результат почти всегда тот же
+NOT_FOUND_RETRY = 7 * 86400
 # класс исключения spotdl → причина «не скачан»
 REASON_BY_ERROR = {"LookupError": "not_found", "AudioProviderError": "download_failed",
                    "ConnectionError": "network"}
@@ -94,6 +97,31 @@ def add_missing_track(conn, song: dict, spotify_id: Optional[str], now: float, o
     return tid
 
 
+# поля, которых нет в списке от SpotipyFree, но есть в save-файле прошлого синка spotdl
+_ENRICH = ("isrc", "album_name", "album_artist", "album_id", "album_type", "tracks_count", "disc_count",
+           "year", "date", "cover_url", "genres", "publisher", "copyright_text", "artist_id")
+
+
+def enrich(songs: List[dict], previous: List[dict]) -> int:
+    """Дополнить треки свежего списка данными из прошлого save-файла (по ID
+    Spotify): ISRC нужен для сопоставления с библиотекой, а с жанрами и числом
+    дисков spotdl не дозапрашивает трек у Spotify. Возвращает, сколько треков
+    дополнено."""
+    by_id = {spotify_id_of(s): s for s in previous if isinstance(s, dict)}
+    n = 0
+    for s in songs:
+        old = by_id.get(spotify_id_of(s))
+        if not old:
+            continue
+        touched = False
+        for k in _ENRICH:
+            if s.get(k) in (None, "") and old.get(k) not in (None, ""):
+                s[k] = old[k]
+                touched = True
+        n += touched
+    return n
+
+
 def reconcile(conn, playlist_id: int, source_id: int, songs: List[dict], now: float) -> dict:
     """Состав источника по свежему списку: переписывает playlist_items этого
     источника, недостающим заводит ряды «не скачан», связывает их с уже
@@ -121,15 +149,21 @@ def reconcile(conn, playlist_id: int, source_id: int, songs: List[dict], now: fl
         "SELECT t.id FROM playlist_items pi JOIN tracks t ON t.id = pi.track_id "
         "WHERE pi.playlist_id = ? AND pi.source_id = ? AND t.status = 'missing'", (playlist_id, source_id))]
     linked = dedupe.link_missing(conn, missing)
-    to_fetch = []
+    to_fetch, waiting = [], 0
     for sp, song in entries:
         tid = find_track(conn, sp, None) if sp else None
         if tid is None:
             continue
-        if conn.execute("SELECT status FROM tracks WHERE id = ?", (tid,)).fetchone()[0] == "missing":
-            to_fetch.append((tid, song))
-    return {"tracks": len(entries), "present": len(entries) - len(to_fetch), "linked": len(linked),
-            "to_fetch": to_fetch}
+        row = conn.execute("SELECT t.status, m.reason, m.last_attempt_at FROM tracks t "
+                           "LEFT JOIN missing m ON m.track_id = t.id WHERE t.id = ?", (tid,)).fetchone()
+        if row["status"] != "missing":
+            continue
+        if row["reason"] == "not_found" and row["last_attempt_at"] and now - row["last_attempt_at"] < NOT_FOUND_RETRY:
+            waiting += 1        # недавно искали на YouTube и не нашли — ~минута впустую на трек
+            continue
+        to_fetch.append((tid, song))
+    return {"tracks": len(entries), "present": len(entries) - len(to_fetch) - waiting, "linked": len(linked),
+            "waiting": waiting, "to_fetch": to_fetch}
 
 
 def parse_result(line: str) -> Optional[dict]:
@@ -297,6 +331,12 @@ def run(job, pl, prog) -> int:
         job.append(f"[sync] «{pl.name}»: площадка вернула пустой список — состав оставлен прежним")
         prog.set_phase("done")
         return 0
+    try:
+        from . import playlists
+        with open(config.savefile_path(pl.id), "r", encoding="utf-8") as fh:
+            enrich(songs, playlists.savefile_songs(json.load(fh)))
+    except (OSError, ValueError):
+        pass
     now = time.time()
     with db.connect() as conn:
         with db.transaction(conn):
@@ -315,9 +355,11 @@ def run(job, pl, prog) -> int:
     todo = plan["to_fetch"]
     job.append(f"[sync] «{pl.name}»: в списке {plan['tracks']}, уже есть {plan['present']}"
                + (f" (из них найдено под другим релизом {plan['linked']})" if plan["linked"] else "")
+               + (f", не найдено на YouTube недавно {plan['waiting']} (повтор раз в неделю)" if plan["waiting"] else "")
                + f", качать {len(todo)}")
-    prog.total, prog.base = plan["tracks"], plan["present"]
-    prog.processed = prog.skipped = plan["present"]
+    prog.total, prog.base = plan["tracks"], plan["present"] + plan["waiting"]
+    prog.processed, prog.skipped = prog.base, plan["present"]
+    prog.lookup_failed = plan["waiting"]
     prog.set_phase("prepare")
 
     rc, results = 0, []
@@ -343,6 +385,7 @@ def run(job, pl, prog) -> int:
         with db.transaction(conn):
             st = apply_results(conn, results, time.time())
             result = {"engine": "index", "tracks": plan["tracks"], "present": plan["present"],
+                      "not_found_waiting": plan["waiting"],
                       "linked": plan["linked"] + st["linked"], "downloaded": st["downloaded"],
                       "failed": st["failed"], "by_reason": st["by_reason"], "unreported": len(todo) - len(results),
                       "rc": rc, "at": time.time()}

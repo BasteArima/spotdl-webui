@@ -109,6 +109,26 @@ def test_reconcile_finds_present_and_other_release():
         assert n == 3
 
 
+def test_enrich_from_previous_savefile_finds_by_isrc():
+    _setup()
+    other = _file("spotify/Artist/Remaster/g.mp3", "Golf (2024 Remaster)", "h")   # файл с другим ID Spotify
+    scanner.scan()
+    with db.connect() as conn:
+        isrc = conn.execute("SELECT isrc FROM tracks WHERE path = ?", (other,)).fetchone()[0]
+    songs = [_song("g", "Golf")]                      # список от SpotipyFree: ни ISRC, ни альбома
+    previous = [_song("g", "Golf", isrc=isrc, album_name="Al", genres=["rock"], disc_count=1)]
+    assert index_sync.enrich(songs, previous) == 1
+    assert songs[0]["isrc"] == isrc and songs[0]["genres"] == ["rock"] and songs[0]["album_name"] == "Al"
+    with db.connect() as conn, db.transaction(conn):
+        pid, sid = _ids(conn)
+        plan = index_sync.reconcile(conn, pid, sid, songs, time.time())
+    assert plan["present"] == 1 and not plan["to_fetch"], plan
+    with db.connect() as conn:   # и запомнил ID Spotify — следующий синк найдёт без ISRC
+        row = conn.execute("SELECT t.path FROM track_ids i JOIN tracks t ON t.id = i.track_id "
+                           "WHERE i.kind = 'spotify' AND i.value = ?", (SP["g"],)).fetchone()
+    assert row and row[0] == other
+
+
 def test_apply_results_and_m3u():
     files = _setup()
     songs = [_song("a", "Alpha"), _song("b", "Bravo"), _song("d", "Delta"), _song("e", "Echo"),
@@ -148,6 +168,23 @@ def test_apply_results_and_m3u():
     with db.connect() as conn:
         n = conn.execute("SELECT COUNT(*) FROM tracks WHERE title = 'Bravo'").fetchone()[0]
         assert n == 1
+
+
+def test_not_found_retried_weekly():
+    _setup()
+    songs = [_song("d", "Delta"), _song("e", "Echo")]
+    now = time.time()
+    with db.connect() as conn, db.transaction(conn):
+        pid, sid = _ids(conn)
+        index_sync.reconcile(conn, pid, sid, songs, now)
+        index_sync.apply_results(conn, [
+            {"url": f"https://open.spotify.com/track/{SP['d']}", "error": "LookupError: No results"},
+            {"url": f"https://open.spotify.com/track/{SP['e']}", "error": "AudioProviderError: blocked"}], now)
+        again = index_sync.reconcile(conn, pid, sid, songs, now + 3600)
+        later = index_sync.reconcile(conn, pid, sid, songs, now + 8 * 86400)
+    # «нет на YouTube» ждёт неделю, блок YouTube повторяется сразу
+    assert again["waiting"] == 1 and [s["name"] for _t, s in again["to_fetch"]] == ["Echo"], again
+    assert later["waiting"] == 0 and len(later["to_fetch"]) == 2, later
 
 
 def test_managed_playlist_untouched_by_legacy_import():
