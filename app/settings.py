@@ -71,14 +71,14 @@ FIELDS: List[Field] = [
     Field("autosync_start_delay", "AUTOSYNC_START_DELAY", "int", 20,
           "Задержка автосинка после старта", G_SYNC, "Чтобы веб успел подняться.",
           lo=0, hi=3600, unit="с"),
-    Field("sync_engine", "SYNC_ENGINE", "choice", "spotdl",
+    Field("sync_engine", "SYNC_ENGINE", "choice", "index",
           "Как синхронизировать плейлисты", G_SYNC,
           "Через индекс: сервис сам получает список треков, сверяет его с библиотекой "
           "(в том числе с файлами других релизов) и отдаёт spotdl только недостающее; "
           "m3u собирает из индекса — в них только скачанное. По-старому: всё делает "
           "spotdl sync. Действует и на ручной синк, и на автосинк.",
           choices=["spotdl", "index"],
-          labels={"spotdl": "по-старому (spotdl sync)", "index": "через индекс (новый)"}),
+          labels={"spotdl": "по-старому (spotdl sync)", "index": "через индекс"}),
     Field("auto_fetch", "AUTO_FETCH", "choice", "off",
           "Добивать то, чего нет на YouTube", G_SYNC,
           "После синка через индекс треки, которые не нашлись на YouTube, сразу ставятся в "

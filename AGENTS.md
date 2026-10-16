@@ -304,7 +304,7 @@ app/playlists.py     плейлисты: с этапа 3 главный спис
                      (meta playlists_master=db), дальше playlists.txt — ВЫГРУЗКА после каждой
                      правки (для синка по-старому, /legacy и отката образа), ручные правки файла
                      не читаются. read_playlists()/find_by_url — из индекса; legacy_id = md5(ссылки).
-app/index_sync.py    синк через индекс (настройка sync_engine=index): spotify_source → reconcile
+app/index_sync.py    синк через индекс (sync_engine=index — по умолчанию с 3.5; spotdl — запасной): spotify_source → reconcile
                      (ID Spotify → ISRC → dedupe.link_missing ур. 1–3: файл другого релиза не качаем)
                      → `spotdl download <только недостающие>` с results=True → apply_results (путь /
                      слияние с уже проиндексированным файлом / причина в missing) → m3u_gen. Плейлист

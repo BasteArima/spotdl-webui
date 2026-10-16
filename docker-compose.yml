@@ -41,9 +41,9 @@ services:
       # Фоновый автосинк. 0 = выключить.
       # - AUTOSYNC_INTERVAL_HOURS=24
       # - AUTOSYNC_ON_START=false
-      # Как синкать: spotdl (по-старому) или index (сервис сверяет список с
-      # библиотекой и качает только недостающее, m3u собирает сам).
-      # - SYNC_ENGINE=spotdl
+      # Как синкать: index (сервис сверяет список с библиотекой и качает только
+      # недостающее, m3u собирает сам) или spotdl (по-старому, spotdl sync).
+      # - SYNC_ENGINE=index
       # Добивать то, чего нет на YouTube (только при SYNC_ENGINE=index): off / deezer / auto
       # - AUTO_FETCH=off
       #
