@@ -14,9 +14,13 @@
     те, что собирает сервис, — заново из индекса, прежние (spotdl) — заменой
     строки пути.
 
-Авто-склейка берёт только пары уровней 1–3, где совпадение подтверждается и
-метаданными, а не одним общим ID: spotdl бывает берёт один ролик YouTube для
-двух разных песен — такие пары остаются решать пользователю.
+Уверенные пары (их склеивает «Склеить все уверенные» и авто-склейка) — уровни
+1–3, где совпадение подтверждают метаданные, ЛИБО общий трек Spotify/Deezer:
+это буквально одна позиция каталога (spotdl скачал её второй раз после того,
+как Spotify переименовал трек — «(Intro)» → «- Intro / From The Series…»).
+Общий ролик YouTube при разных названиях — не уверенно: spotdl бывает берёт
+один ролик для двух разных песен (Japanese / English Version), там у одного
+файла не тот звук — решает пользователь.
 
 Запуск: python -m app.merge [--auto] — применить решения «один трек» (и с
 --auto — уверенные пары); итог — JSON последней строкой. Под library_lock:
@@ -131,14 +135,21 @@ def _side(r) -> dict:
     return {"title": r["title"], "artists": artists, "duration": r["duration"], "isrc": r["isrc"], "ids": {}}
 
 
+# общий ID каталога (не ролика YouTube) — та же позиция площадки (scanner._ID_LABEL, matching.compare)
+CATALOG_ID_REASONS = ("один и тот же трек Spotify", "один и тот же трек Deezer")
+
+
 def auto_eligible(conn) -> List[int]:
-    """Нерешённые пары уровней 1–3, где и метаданные говорят «та же запись»
-    (сравнение без общих ID). id кандидатов."""
+    """Нерешённые пары уровней 1–3: общий трек Spotify/Deezer или метаданные
+    говорят «та же запись» (сравнение без общих ID). id кандидатов."""
     out = []
-    for c in conn.execute("SELECT c.id, a.title AS ta, a.artists AS aa, a.duration AS da, a.isrc AS ia, "
+    for c in conn.execute("SELECT c.id, c.level, c.reason, a.title AS ta, a.artists AS aa, a.duration AS da, a.isrc AS ia, "
                           "b.title AS tb, b.artists AS ab, b.duration AS db, b.isrc AS ib "
                           "FROM match_candidates c JOIN tracks a ON a.id = c.track_a JOIN tracks b ON b.id = c.track_b "
                           "WHERE c.decision IS NULL AND c.level <= 3 AND a.status = 'ok' AND b.status = 'ok'").fetchall():
+        if c["level"] == 1 and c["reason"] in CATALOG_ID_REASONS:
+            out.append(c["id"])
+            continue
         res = matching.compare(_side({"title": c["ta"], "artists": c["aa"], "duration": c["da"], "isrc": c["ia"]}),
                                _side({"title": c["tb"], "artists": c["ab"], "duration": c["db"], "isrc": c["ib"]}))
         if res and res[0] <= 3:

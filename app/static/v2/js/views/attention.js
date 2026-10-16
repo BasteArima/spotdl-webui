@@ -108,7 +108,7 @@ function dupeCard(p) {
   return `<div class="card pad" style="margin-bottom:12px" data-dupe="${p.id}">
     <div class="row" style="justify-content:space-between;margin-bottom:10px;gap:8px;flex-wrap:wrap">
       <span class="small muted">${esc(p.reason)}</span>${chip(`${LEVEL[p.level] || ""} · ${p.score}%`, isSure(p) ? "ok" : "warn")}</div>
-    ${p.level <= 3 && !p.safe ? `<div class="tiny muted" style="margin:-4px 0 10px">Общий ID, но названия разные — возможно, spotdl взял один и тот же звук для двух разных песен. Послушайте оба файла.</div>` : ""}
+    ${p.level <= 3 && !p.safe ? `<div class="tiny muted" style="margin:-4px 0 10px">Общий ролик YouTube, но названия разные — похоже, spotdl взял один и тот же звук для двух разных песен, и у одного файла звук не тот. Послушайте оба.</div>` : ""}
     <div class="dup"><div class="side-a">${side(p.a)}</div><span class="vs muted">${icon("arrows-left-right")}</span><div class="side-b">${side(p.b)}</div></div>
     <div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap">
       <button class="btn primary sm" data-decide="same">${icon("link", "sm")}Один трек — склеить, оставить ${esc(keep.codec || "")} ${keep.bitrate ? keep.bitrate + "k" : ""}</button>
@@ -128,7 +128,7 @@ function dupesTab(d) {
       <button data-dlevel="maybe" class="${dupeLevel === "maybe" ? "on" : ""}">Под вопросом · ${fmtNum(maybe.length)}</button></div>
     ${dupeLevel === "sure" && sure.length ? `<button class="btn tinted sm" data-bulk-same>${icon("link", "sm")}Склеить все уверенные</button>` : ""}</div>
     <div class="tiny muted" style="margin:-4px 4px 12px">${dupeLevel === "sure"
-      ? "Уверенные: тот же ролик YouTube или трек Spotify, тот же ISRC, либо совпали название, исполнитель и длительность — и название это подтверждает."
+      ? "Уверенные: тот же трек Spotify, тот же ISRC, либо совпали название, исполнитель и длительность (общий ролик YouTube — если название тоже совпало). Один трек из разных альбомов тоже склеивается — альбом-плейлист остаётся полным."
       : "Под вопросом: похоже, но не точно — лучше послушать обе версии."}</div>`;
   if (!list.length) {
     return note + seg + `<div class="card empty">${icon("circle-check", "xl")}<div style="margin-top:8px">Здесь пусто</div></div>`;

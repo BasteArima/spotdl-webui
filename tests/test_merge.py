@@ -22,7 +22,7 @@ PL_URL = "https://open.spotify.com/playlist/37i9dQZF1DX0000000000001"
 SP = {n: f"{n:0>22}" for n in "abcdefgh"}
 
 
-def _file(rel, name, key, seconds=200, kbps=8, isrc=None, artist="Artist"):
+def _file(rel, name, key, seconds=200, kbps=8, isrc=None, artist="Artist", yt=None):
     from pathlib import Path
     from spotdl.types.song import Song
     from spotdl.utils.metadata import embed_metadata
@@ -34,7 +34,8 @@ def _file(rel, name, key, seconds=200, kbps=8, isrc=None, artist="Artist"):
                                genres=[], disc_number=1, disc_count=1, track_number=1, tracks_count=1, year=2024,
                                date="2024", song_id=SP[key], url=f"https://open.spotify.com/track/{SP[key]}",
                                isrc=isrc or "QZ" + format(abs(hash(rel)) % 10**10, "010d"), duration=seconds,
-                               explicit=False, publisher="", cover_url=None, copyright_text=None, lyrics=None)
+                               explicit=False, publisher="", cover_url=None, copyright_text=None, lyrics=None,
+                               download_url=f"https://music.youtube.com/watch?v={yt}" if yt else None)
     embed_metadata(Path(path), s, skip_album_art=True)
     return os.path.abspath(path)
 
@@ -50,9 +51,12 @@ def _setup():
     with open(worse[:-4] + ".lrc", "w") as fh:
         fh.write("[00:01.00]la")
     better = _file("spotify/Artist/Time (Deluxe)/01 - Song.mp3", "Song", "a", kbps=32)
-    # spotdl взял один ролик для двух разных песен — общий ID, разные названия
-    _file("spotify/Artist/Al/b1.mp3", "The Beast", "b")
-    _file("spotify/Artist/Al/b2.mp3", "Playground", "b")
+    # spotdl взял один ролик для двух разных песен — общий ролик, разные названия
+    _file("spotify/Artist/Al/b1.mp3", "The Beast", "b", yt="abcdefghijk")
+    _file("spotify/Artist/Al/b2.mp3", "Playground", "c", yt="abcdefghijk")
+    # Spotify переименовал трек, spotdl скачал его второй раз — общий трек Spotify
+    _file("spotify/Artist/Al/d1.mp3", "Intro (from the series X)", "d", seconds=100)
+    _file("spotify/Artist/Al/d2.mp3", "Intro - From The Series X / Score", "d", seconds=100)
     scanner.scan()
     playlists.read_playlists()
     with db.connect() as conn, db.transaction(conn):
@@ -81,13 +85,14 @@ def test_auto_eligible_skips_shared_id_with_other_title():
         safe = set(merge.auto_eligible(conn))
     song = pairs[("Song", "Song")]
     beast = next(v for k, v in pairs.items() if "The Beast" in k)
-    assert song in safe and beast not in safe, (pairs, safe)
+    renamed = next(v for k, v in pairs.items() if k[0].startswith("Intro") and k[1].startswith("Intro"))
+    assert song in safe and renamed in safe and beast not in safe, (pairs, safe)
 
 
 def test_merge_moves_worse_file_to_trash_and_fixes_playlists():
     worse, better, pid = _setup()
     rep = merge.apply(auto=True, log=lambda m: None)
-    assert rep["merged"] == 1 and rep["auto"] == 1, rep
+    assert rep["merged"] == 2 and rep["auto"] == 2, rep            # Song и переименованный Intro
     trash = os.path.join(config.MUSIC_DIR, ".trash", "spotify", "Artist", "TIME", "01 - Song.mp3")
     assert not os.path.exists(worse) and os.path.exists(trash) and os.path.exists(trash[:-4] + ".lrc")
     assert os.path.exists(os.path.join(config.MUSIC_DIR, ".trash", ".ndignore"))
@@ -116,7 +121,7 @@ def test_restore_and_empty_trash():
     worse, better, _pid = _setup()
     merge.apply(auto=True, log=lambda m: None)
     with db.connect() as conn:
-        items = merge.trash_list(conn)
+        items = [i for i in merge.trash_list(conn) if i["title"] == "Song"]
         assert len(items) == 1 and items[0]["from"] == worse and items[0]["exists"]
         with db.transaction(conn):
             merge.restore(conn, items[0]["id"])
@@ -135,7 +140,7 @@ def test_restore_and_empty_trash():
     assert merge.apply(log=lambda m: None)["merged"] == 1
     with db.connect() as conn, db.transaction(conn):
         res = merge.empty_trash(conn)
-    assert res["files"] == 1, res
+    assert res["files"] == 2, res                                  # Song и Intro
     with db.connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM tracks WHERE status = 'trashed'").fetchone()[0] == 0
     assert not os.path.exists(os.path.join(config.MUSIC_DIR, ".trash", "spotify", "Artist", "TIME", "01 - Song.mp3"))
