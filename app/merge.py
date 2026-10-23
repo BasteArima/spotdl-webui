@@ -135,7 +135,8 @@ def _side(r) -> dict:
     return {"title": r["title"], "artists": artists, "duration": r["duration"], "isrc": r["isrc"], "ids": {}}
 
 
-# общий ID каталога (не ролика YouTube) — та же позиция площадки (scanner._ID_LABEL, matching.compare)
+# общий ID каталога (не ролика YouTube) — та же позиция площадки (scanner._ID_LABEL, matching.compare);
+# уверенно — если и длительности файлов в пределах ±3 с
 CATALOG_ID_REASONS = ("один и тот же трек Spotify", "один и тот же трек Deezer")
 
 
@@ -148,6 +149,10 @@ def auto_eligible(conn) -> List[int]:
                           "FROM match_candidates c JOIN tracks a ON a.id = c.track_a JOIN tracks b ON b.id = c.track_b "
                           "WHERE c.decision IS NULL AND c.level <= 3 AND a.status = 'ok' AND b.status = 'ok'").fetchall():
         if c["level"] == 1 and c["reason"] in CATALOG_ID_REASONS:
+            # тот же трек каталога, но файлы с разных роликов: длиннее на интро клипа,
+            # TV-size и т.п. — какой из них верный, решает пользователь (послушав)
+            if c["da"] and c["db"] and abs(c["da"] - c["db"]) > 3:
+                continue
             out.append(c["id"])
             continue
         res = matching.compare(_side({"title": c["ta"], "artists": c["aa"], "duration": c["da"], "isrc": c["ia"]}),

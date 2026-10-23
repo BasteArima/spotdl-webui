@@ -57,6 +57,9 @@ def _setup():
     # Spotify переименовал трек, spotdl скачал его второй раз — общий трек Spotify
     _file("spotify/Artist/Al/d1.mp3", "Intro (from the series X)", "d", seconds=100)
     _file("spotify/Artist/Al/d2.mp3", "Intro - From The Series X / Score", "d", seconds=100)
+    # тот же трек Spotify, но второй файл с клипа — на 9 с длиннее: не уверенно
+    _file("spotify/Artist/Al/e1.mp3", "Usseewa", "e", seconds=207)
+    _file("spotify/Artist/Al/e2.mp3", "うっせぇわ", "e", seconds=216)
     scanner.scan()
     playlists.read_playlists()
     with db.connect() as conn, db.transaction(conn):
@@ -86,7 +89,8 @@ def test_auto_eligible_skips_shared_id_with_other_title():
     song = pairs[("Song", "Song")]
     beast = next(v for k, v in pairs.items() if "The Beast" in k)
     renamed = next(v for k, v in pairs.items() if k[0].startswith("Intro") and k[1].startswith("Intro"))
-    assert song in safe and renamed in safe and beast not in safe, (pairs, safe)
+    longer = next(v for k, v in pairs.items() if "Usseewa" in k)
+    assert song in safe and renamed in safe and beast not in safe and longer not in safe, (pairs, safe)
 
 
 def test_merge_moves_worse_file_to_trash_and_fixes_playlists():
