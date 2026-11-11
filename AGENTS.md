@@ -2,21 +2,30 @@
 
 > Прочитай целиком перед работой. Здесь то, что НЕ видно из кода: модель деплоя,
 > выстраданные грабли, как тестировать, что секретно. UI и комментарии — на русском.
+>
+> **Новый чат = новая фича.** Пользователь начинает отдельный чат на каждую задачу.
+> Порядок: этот файл → [design/plan.md](design/plan.md) (этапы и задачи, чекбоксы — что
+> сделано и что дальше) → нужные модули из §11. Состояние и следующие шаги — §12.
 
 ## 1. Что это
 
-Самостоятельный веб-сервис в Docker: браузерный UI для управления локальной
-музыкальной библиотекой, которую качает **spotdl** из Spotify (аудио берётся со
-сторонних площадок — Spotify не отдаёт файлы напрямую). Музыку раздаёт уже
-работающий **Navidrome** (его не трогаем). Главные функции:
-- управление `playlists.txt` (формат `Имя|ссылка`), запуск `spotdl sync`;
-- **ручное добивание** треков, которые автопоиск не нашёл на YouTube;
-- несколько источников аудио (YouTube / Deezer / Spotify-напрямую / заливка файла);
+Самостоятельный веб-сервис в Docker: личный бэкап и миграция музыки из Spotify (позже —
+YouTube Music) плюс свои файлы. Сервис ведёт библиотеку сам — индекс SQLite
+(`/conf/library.db`): какие файлы есть, откуда, в каких плейлистах, что не скачано, что
+дубль. Площадки — источники списков треков; **spotdl** — один из загрузчиков (звук с
+YouTube). Музыку раздаёт уже работающий **Navidrome** (его не трогаем), слушают в
+**Arpeggi** (iPhone/iPad). Видение и решения пользователя — в памяти агента
+(`product-vision.md`, `playlists-over-albums.md`: плейлисты важнее альбомов Navidrome).
+Главные функции:
+- плейлисты (в индексе; `playlists.txt` — только выгрузка) и синк через индекс: качается
+  только недостающее, m3u собирает сервис;
+- **добивание** того, чего нет на YouTube (Deezer / Spotify напрямую / своя ссылка / файл);
+- **склейка дублей** с корзиной `/music/.trash`;
 - **массовый апгрейд** библиотеки до 320k (Step 2).
 
 Стек: **FastAPI (Python) + ванильный JS SPA** (без фреймворков), один Docker-контейнер.
 FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы** (чтобы тяжёлые импорты
-не висели в веб-процессе). Тёмная тема под Navidrome.
+не висели в веб-процессе). UI — светлая/тёмная тема, на телефоне вкладки снизу.
 
 ## 2. Модель деплоя (ВАЖНО — неочевидно)
 
@@ -39,7 +48,7 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
 
 ## 3. Источники аудио (как добить трек)
 
-1. **YouTube (spotdl)** — основной. Кнопка «Скачать» по ссылке YT/YT-Music из поля.
+1. **YouTube (spotdl)** — основной: синк качает недостающее сам; вручную — «Своя ссылка YouTube» у трека.
 2. **Deezer** ([app/deezer.py](app/deezer.py), [deezer_dl.py](app/deezer_dl.py)) — по
    **ISRC** (точное совпадение), фолбэк — поиск по «артист+название» если нет ISRC.
    Нужен **ARL-токен** (секрет!) в `/conf/deezer_arl.txt` или env `DEEZER_ARL`.
@@ -48,8 +57,8 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
    [spotify_dl.py](app/spotify_dl.py) — одноразовый CLI) через **librespot**: реальное
    аудио со Spotify, **320k с Premium**. Берёт аудио по track-id через content_feeder
    (НЕ через `api.spotify.com` — он даёт стойкий 429!). Метаданные/обложку даёт spotdl.
-   Кнопка «Spotify 320k». Нужны креды (см. §5).
-4. **Заливка файла** ([place_localfile.py](app/place_localfile.py)) — кнопка «📁 Файл»:
+   Источник «Spotify 320k» у трека. Нужны креды (см. §5).
+4. **Заливка файла** ([place_localfile.py](app/place_localfile.py)) — источник «Свой файл»:
    локальный файл → мета/обложка со Spotify → в библиотеку.
 5. **Liked Songs** — запись `Имя|saved` в `playlists.txt`. Данные треков сервис
    собирает САМ через токен пользователя (подпроцесс `app.spotify_login
@@ -93,7 +102,7 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
   поверх real-time (аналог Zotify `bulk_wait_time`).
 - Кто когда: **массовая закачка + апгрейд → всегда real-time + пауза**; одиночные
   «Spotify 320k» → real-time только при включённой галочке **«Безопасный режим»**
-  (тумблер в шапке UI, `ZOTIFY_SAFE_MODE`, хранится в `/conf/.webui-settings.json`).
+  («Настройки» → «Spotify напрямую», `ZOTIFY_SAFE_MODE`, хранится в `/conf/.webui-settings.json`).
 - Риск бана аккаунта Spotify остаётся ненулевым — это эвристики. Пользователь
   принял риск (свой Premium). Можно `UPGRADE_PER_DAY` (лимит в сутки).
 
@@ -106,10 +115,10 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
   подписи подмешан отпечаток пароля → смена пароля разлогинивает всех. Сырой
   env-пароль в `Authorization` тоже принимается (совместимость со старыми
   клиентами). Анти-перебор: 5 ошибок/IP → 10 мин. `/api/auth/status` — без авторизации.
-- `/conf/cookies.txt`, `/conf/deezer_arl.txt` — пишутся из вкладки «Настройки» (mode 600).
+- `/conf/cookies.txt`, `/conf/deezer_arl.txt` — пишутся из раздела «Настройки» (mode 600).
 - `/conf/cookies.txt` — YouTube cookies (Netscape).
 - `/conf/deezer_arl.txt` или `DEEZER_ARL` — Deezer ARL.
-- `/conf/spotify_app.json` (пишется из вкладки «Настройки», `settings.set_spotify_app`,
+- `/conf/spotify_app.json` (пишется из раздела «Настройки», `settings.set_spotify_app`,
   mode 600; секрет в API наружу не отдаётся) / `SPOTIFY_CLIENT_ID`+`SPOTIFY_CLIENT_SECRET`
   (env важнее UI) — своё Spotify-приложение; смена client_id удаляет токен входа; `/conf/.spotify-user-token.json` — OAuth-токен пользователя
   (refresh). `--client-secret` маскируется в логах задач (`jobs._redact`).
@@ -200,14 +209,14 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
   без пауз YouTube на ~400-м треке подряд перестал отдавать аудио. Подпроцессам ставится `COLUMNS=1000`: rich иначе рвёт
   длинные строки на 80 колонок.
 - **Step 2 — апгрейд** ([app/upgrade.py](app/upgrade.py)): фоновый поток проходит по
-  всем трекам библиотеки (union из `*.spotdl` в `/conf`), качает 320k, заменяет файл.
+  файлам библиотеки с треком Spotify (из индекса), качает 320k, заменяет именно этот файл.
   Метка «уже 320k» персистентна (`/conf/.webui-upgraded.json`) → не качает повторно,
   переживает рестарт. Пропуск уже-хороших файлов по битрейту (`UPGRADE_MIN_BITRATE=300`).
   **Долгоживущий воркер** ([app/spotify_worker.py](app/spotify_worker.py)) — ОДНА
   авторизация librespot на весь сеанс (вместо новой на трек): меньше нагрузки и
   ban-риска. Контроллер общается с ним по stdin(URL)/stdout(JSON), result-queue +
   reader/stderr-потоки, таймаут `UPGRADE_TRACK_TIMEOUT`(1200с), авто-рестарт.
-  UI: вкладка «Апгрейд 320k» (старт/стоп, прогресс, ETA).
+  UI: раздел «Качество 320k» (старт/стоп, прогресс, ETA, последние треки).
 
 ## 8. Выстраданные грабли (не сломай!)
 
@@ -241,6 +250,14 @@ FastAPI дёргает spotdl/librespot/ffmpeg как **подпроцессы**
   с этим cwd локально падают — это НЕ баг, на сервере ок).
 - Запуск локально: `CONF_DIR=./_d/conf MUSIC_DIR=./_d/music APP_AUTH_TOKEN=dev
   AUTOSYNC_INTERVAL_HOURS=0 python -m uvicorn app.main:app --port 8000`.
+- На этом ПК тесты — через `C:\Users\user\miniconda3\python.exe` (в PATH первым стоит Python
+  3.14 без spotdl). Все тесты: `for t in tests/test_*.py; do python "$t"; done`.
+- Быстрые проверки UI/логики — на стенде Docker Desktop (`docker-compose.dev.yml`, :4536,
+  данные в `_dev/`, вход выключен); Python-правки — `docker restart spotdl-webui-dev`.
+- Проверка на боевом сервере (`192.168.0.105`: сервис :4535, Navidrome :4533, Portainer :9000) —
+  через встроенный браузер; вход делает сам пользователь (пароли не вводить). Команды внутри
+  боевого контейнера (Portainer exec) запрещены — только API сервиса и Navidrome.
+- Версия на сервере — «Настройки» → «О системе» (коммит вшивает CI).
 - Проверки перед коммитом: `python -c "import ast,glob;[ast.parse(open(f,encoding='utf-8').read()) for f in glob.glob('app/*.py')]"`,
   `node --check app/static/app.js`, `python tests/test_naming.py`,
   `python -c "import yaml;yaml.safe_load(open('docker-compose.yml'))"`.
@@ -263,7 +280,6 @@ app/auth.py          режимы входа, хэш пароля, токены 
 app/config.py        пути/шаблоны/флаги из env
 app/jobs.py          очередь (2 дорожки), воркеры, лок, запуск spotdl, throttle, планировщик
 app/naming.py        safe-имя/md5-id/тип URL (покрыто тестами!)
-app/playlists.py     playlists.txt
 app/errors_parser.py разбор errors/*.txt (+дедуп), удаление добитых
 app/health.py        проверка окружения (cookies/права/deno) → баннер
 app/library.py       place_file: путь+ffmpeg+теги+обложка+m3u; target_path/file_bitrate
@@ -287,8 +303,9 @@ app/scanner.py       скан /music → индекс: теги (WOAS=Spotify, C
                      POST /api/library/rescan. Исполнителей spotdl склеивает «/» — split_artists различает
                      по исполнителю альбома (HUNTR/X). spotdl не пишет ISRC в m4a. Файл с ID трека,
                      который ждал как «не скачан», сливается с ним (db.merge_tracks), а не в дубли.
-app/legacy_import.py playlists.txt + *.spotdl + errors/*.txt → playlists/sources/items/missing (после
-                     каждого скана, пока синк на spotdl; пропускает неизменённые; повторяемый по legacy_id).
+app/legacy_import.py *.spotdl + errors/*.txt → playlist_items/missing — только для плейлистов, которые ещё
+                     синкаются по-старому (managed=0; запасной способ spotdl sync); после каждого скана;
+                     пропускает неизменённые; повторяемый по legacy_id.
                      Трек ищется по ID Spotify, потом по ISRC; иначе ряд «не скачан» (без пути).
 app/matching.py      та же ли запись: parse_title → (основа, маркеры версии); feat/Official Video/
                      «from the series» отбрасываются, live/remaster/cover/ver./slowed — сравниваются
@@ -348,10 +365,9 @@ app/static/v2/       основной UI по design/prototype.html (на «/»;
                      «Авто» = jobs.enqueue_auto: Deezer по ISRC → Spotify напрямую. Экраны перечитывают
                      данные, когда store видит новое завершённое обновление индекса (а не «очередь
                      затихла» — скан короче интервала опроса).
-                     views/attention.js — не скачано / дубли / источники. Решение «same» по дублю
-                     пока только запоминается (match_candidates.decision): склеивать файлы
-                     безопасно, когда m3u собирает сервис (этап 3), до того m3u spotdl сослался бы
-                     на ушедший в корзину файл. Источник «unavailable» ставит синк по ответу
+                     views/attention.js — не скачано / дубли / источники / корзина. Решение «same» по
+                     дублю ставит задачу склейки (app/merge.py); «уверенные» = isSure (level ≤ 3 и
+                     safe с сервера). Источник «unavailable» ставит синк по ответу
                      Spotify «Playlist not available» (jobs._mark_source_availability); импорт
                      статус источника не трогает.
                      views/library.js (GET /api/v2/library: поиск — своя SQL-функция ulower,
@@ -381,18 +397,19 @@ docs/                installation / configuration / sources / troubleshooting / 
 
 - **Идёт переделка по [design/plan.md](design/plan.md)** (согласована с пользователем):
   сервис ведёт библиотеку сам (индекс SQLite), площадки — источники списков, spotdl —
-  один из загрузчиков; YouTube Music, склейка дублей между площадками, единый поиск,
-  новый UI по [design/prototype.html](design/prototype.html). Задачи — чекбоксы в плане;
-  отмечать выполненные там же. Миграции `app/db.py`: только дописывать новые в конец.
-
-- Сделано: все источники, анти-бан (real-time+пауза), Step 2 с долгоживущим воркером,
-  резолв битых имён, фиксы из code-review.
-- Опционально (из ревью, не критично): общий хелпер для одинаковых хвостов
-  `_run_deezer/_run_zotify/_run_upload`; таблица источник→endpoint в JS вместо дублей.
-- **FLAC-апгрейд** — обсуждался: возможен той же схемой, но FLAC даёт ТОЛЬКО платный
-  lossless-сервис (Deezer HiFi / Qobuz / Tidal по ISRC, streamrip/deemix). Spotify FLAC
-  не отдаёт. Нужен платный аккаунт — пока не делаем.
-- Редизайн под Apple HIG сделан новым интерфейсом (`app/static/v2/`, этап 2 плана) — он
-  теперь основной на «/». Прежний (`app/static/`) живёт на «/legacy» до обкатки; новые
-  функции — только в v2, старый не развивать.
-```
+  один из загрузчиков. Задачи — чекбоксы в плане; отмечать выполненные там же.
+  Миграции `app/db.py`: только дописывать новые в конец.
+- **Сделано:** этап 1 (индекс), этап 2 (новый UI на «/», прежний на «/legacy»), этап 3
+  (синк через индекс — по умолчанию; проверен на боевой библиотеке: 52 плейлиста ~16 мин),
+  4.4 (склейка дублей + корзина; уверенные пары склеивает пользователь кнопкой). Плюс: все
+  источники, анти-бан, Step 2 с долгоживущим воркером (берёт файлы из индекса), версия
+  образа в настройках.
+- **Дальше по плану:** 4.1–4.3 (YouTube Music: «Понравившиеся» и плейлисты через ytmusicapi,
+  загрузчик yt-dlp по videoId, плейлист из нескольких источников), этап 5 (поиск), этап 6
+  (поиск в Arpeggi через прокси Subsonic).
+- **Идеи из разбора дублей:** 22 пары «общий ролик YouTube, разные названия» — у одного файла
+  не тот звук (spotdl взял один ролик для двух песен) → действие «перекачать из другого
+  источника». Пары «тот же трек Spotify, разная длина» — подсказать, какая длина у Spotify.
+- **FLAC-апгрейд** — возможен той же схемой, но нужен платный lossless-сервис (Deezer HiFi /
+  Qobuz / Tidal по ISRC). Spotify FLAC не отдаёт. Пока не делаем.
+- Прежний UI (`app/static/`) не развивать; новые функции — только в v2.
